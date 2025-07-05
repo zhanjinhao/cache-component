@@ -146,9 +146,9 @@ public class CacheHelper implements DisposableBean {
 
   private String concurrencyGranularity = CONCURRENCY_GRANULARITY_PREFIX;
 
-  private DelayQueue<DeleteTask> deleteTaskQueue;
+  private volatile DelayQueue<DeleteTask> deleteTaskQueue;
 
-  private Thread deleteTaskConsumer;
+  private volatile Thread deleteTaskConsumer;
 
   public void setConcurrencyGranularity(String concurrencyGranularity) {
     switch (concurrencyGranularity) {
@@ -160,7 +160,7 @@ public class CacheHelper implements DisposableBean {
         break;
       default:
         this.concurrencyGranularity = null;
-        throw new IllegalArgumentException("concurrencyGranularity can only be CONCURRENCY_GRANULARITY_KEY or CONCURRENCY_GRANULARITY_KEY.");
+        throw new IllegalArgumentException(Slf4jUtils.format("concurrencyGranularity can only be {} or {}.", CONCURRENCY_GRANULARITY_KEY, CONCURRENCY_GRANULARITY_PREFIX));
     }
   }
 
