@@ -1,9 +1,11 @@
 package cn.addenda.component.cache.test.helper;
 
-import cn.addenda.component.base.concurrent.SleepUtils;
+import cn.addenda.component.base.util.SleepUtils;
 import cn.addenda.component.cache.helper.CacheHelper;
 import cn.addenda.component.cache.helper.RedissonRedisCacheHelper;
 import cn.addenda.component.cache.test.RedissonClientBaseTest;
+import cn.addenda.component.cache.test.helper.biz.CacheHelperTestService;
+import cn.addenda.component.cache.test.helper.biz.User;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.After;

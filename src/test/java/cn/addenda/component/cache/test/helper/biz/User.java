@@ -1,4 +1,4 @@
-package cn.addenda.component.cache.test.helper;
+package cn.addenda.component.cache.test.helper.biz;
 
 import lombok.Getter;
 import lombok.Setter;

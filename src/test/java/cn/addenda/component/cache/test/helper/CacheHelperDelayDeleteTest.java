@@ -1,8 +1,10 @@
 package cn.addenda.component.cache.test.helper;
 
-import cn.addenda.component.base.concurrent.SleepUtils;
+import cn.addenda.component.base.util.SleepUtils;
 import cn.addenda.component.cache.ExpiredHashMapKVCache;
 import cn.addenda.component.cache.helper.CacheHelper;
+import cn.addenda.component.cache.test.helper.biz.CacheHelperTestService;
+import cn.addenda.component.cache.test.helper.biz.User;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.After;
 import org.junit.Before;
@@ -54,6 +56,14 @@ public class CacheHelperDelayDeleteTest {
 
   public static final String userCachePrefix = "user:";
 
+  /**
+   * 第1次update：
+   * 因为delete方法执行了1s。所以延迟是2s。超时时间是4s。延迟删除执行的delete方法执行5s。所以日志里会显示超时。因为delete方法已经在执行了，所以最终会执行成功。
+   *
+   * 第2次update：
+   * 因为delete方法执行了3s。所以延迟是6s。超时时间是12s。延迟删除执行的delete方法执行5s。所以日志里不会显示超时。
+   *
+   */
   @Test
   public void test() {
     // insert 不走缓存
@@ -70,7 +80,7 @@ public class CacheHelperDelayDeleteTest {
     User userFromDb3 = queryByPpf("Q1");
     log.info(userFromDb3 != null ? userFromDb3.toString() : null);
 
-    SleepUtils.sleep(TimeUnit.SECONDS, 100);
+    SleepUtils.sleep(TimeUnit.SECONDS, 30);
   }
 
   private User queryByPpf(String userId) {

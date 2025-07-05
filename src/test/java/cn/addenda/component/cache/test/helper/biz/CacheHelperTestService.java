@@ -1,4 +1,4 @@
-package cn.addenda.component.cache.test.helper;
+package cn.addenda.component.cache.test.helper.biz;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;

@@ -1,7 +1,10 @@
 package cn.addenda.component.cache.test;
 
 import lombok.ToString;
+import org.junit.Assert;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.DelayQueue;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.TimeUnit;
@@ -52,10 +55,16 @@ public class TestDelayQueue {
     // 使用toArray将队列转换为DelayedElement[]数组
     DelayedElement[] elementsArray = delayQueue.toArray(new DelayedElement[]{});
 
+    Assert.assertEquals(500L, elementsArray[0].delayTime);
+    Assert.assertEquals(1000L, elementsArray[1].delayTime);
+
+    List<DelayedElement> result = new ArrayList<>();
     // 打印转换后的数组
     for (DelayedElement element : elementsArray) {
       // 每take的都能拿出来
       System.out.println(element);
+      result.add(element);
     }
   }
+
 }

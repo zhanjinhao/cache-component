@@ -1,8 +1,10 @@
 package cn.addenda.component.cache.test.helper;
 
-import cn.addenda.component.base.concurrent.SleepUtils;
+import cn.addenda.component.base.util.SleepUtils;
 import cn.addenda.component.cache.ExpiredHashMapKVCache;
 import cn.addenda.component.cache.helper.CacheHelper;
+import cn.addenda.component.cache.test.helper.biz.CacheHelperTestService;
+import cn.addenda.component.cache.test.helper.biz.User;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.After;
 import org.junit.Before;
@@ -10,6 +12,7 @@ import org.junit.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.util.Arrays;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -45,21 +48,38 @@ public class CacheHelperTest {
   public static final String userCachePrefix = "user:";
 
   @Test
-  public void test() {
+  public void test1() {
+    // 此类初始化耗时
+    UUID.randomUUID().toString();
+
     // insert 不走缓存
     service.insertUser(User.newUser("Q1"));
+    printSeparator();
 
     User userFromDb1 = queryByPpf("Q1");
     userFromDb1 = queryByPpf("Q1");
     log.info(userFromDb1 != null ? userFromDb1.toString() : null);
+    printSeparator();
 
     updateUserName("Q1", "我被修改了！");
     User userFromDb2 = queryByPpf("Q1");
     log.info(userFromDb2 != null ? userFromDb2.toString() : null);
+    printSeparator();
 
     deleteUser("Q1");
     User userFromDb3 = queryByPpf("Q1");
     log.info(userFromDb3 != null ? userFromDb3.toString() : null);
+    printSeparator();
+
+    service.insertUser(User.newUser("Q1"));
+    printSeparator();
+
+    updateUserName("Q1", "我被修改了2！");
+    User userFromDb5 = queryByPpf("Q1");
+    log.info(userFromDb5 != null ? userFromDb5.toString() : null);
+    printSeparator();
+
+    SleepUtils.sleep(TimeUnit.SECONDS, 1);
   }
 
   private User queryByPpf(String userId) {
@@ -79,19 +99,37 @@ public class CacheHelperTest {
 
   @Test
   public void test2() {
+    // 此类初始化耗时
+    UUID.randomUUID().toString();
+
     // insert 不走缓存
-    service.insertUser(User.newUser("Q2"));
+    service.insertUser(User.newUser("Q1"));
+    printSeparator();
 
-    User userFromDb1 = queryByRdf("Q2");
-    log.info(userFromDb1.toString());
+    User userFromDb1 = queryByRdf("Q1");
+    userFromDb1 = queryByRdf("Q1");
+    log.info(userFromDb1 != null ? userFromDb1.toString() : null);
+    printSeparator();
 
-    updateUserName2("Q2", "我被修改了！");
-    User userFromDb2 = queryByRdf("Q2");
-    log.info(userFromDb2.toString());
+    updateUserName("Q1", "我被修改了！");
+    User userFromDb2 = queryByRdf("Q1");
+    log.info(userFromDb2 != null ? userFromDb2.toString() : null);
+    printSeparator();
 
-    deleteUser2("Q2");
-    User userFromDb3 = queryByRdf("Q2");
+    deleteUser("Q1");
+    User userFromDb3 = queryByRdf("Q1");
     log.info(userFromDb3 != null ? userFromDb3.toString() : null);
+    printSeparator();
+
+    service.insertUser(User.newUser("Q1"));
+    printSeparator();
+
+    updateUserName("Q1", "我被修改了2！");
+    User userFromDb5 = queryByRdf("Q1");
+    log.info(userFromDb5 != null ? userFromDb5.toString() : null);
+    printSeparator();
+
+    SleepUtils.sleep(TimeUnit.SECONDS, 1);
   }
 
   private User queryByRdf(String userId) {
@@ -129,6 +167,11 @@ public class CacheHelperTest {
         throw new RuntimeException(e);
       }
     });
+  }
+
+
+  private void printSeparator() {
+    log.info("---------------------------------------------------------------------------------------------------------------------------------");
   }
 
 }

@@ -19,13 +19,13 @@ public class ExpiredHashMapKVCache<K, V> implements ExpiredKVCache<K, V> {
 
   @Override
   public void set(K k, V v) {
-    map.put(k, new Binary<>(v, Long.MAX_VALUE));
+    map.put(k, Binary.of(v, Long.MAX_VALUE));
   }
 
   @Override
   public void set(K k, V v, long timeout, TimeUnit timeunit) {
     long timeoutMills = timeunit.toMillis(timeout);
-    map.put(k, new Binary<>(v, System.currentTimeMillis() + timeoutMills));
+    map.put(k, Binary.of(v, System.currentTimeMillis() + timeoutMills));
   }
 
   @Override
@@ -73,14 +73,14 @@ public class ExpiredHashMapKVCache<K, V> implements ExpiredKVCache<K, V> {
   @Override
   public V computeIfAbsent(K key, Function<? super K, ? extends V> mappingFunction) {
     V apply = mappingFunction.apply(key);
-    return map.computeIfAbsent(key, k -> new Binary<>(apply, Long.MAX_VALUE)).getF1();
+    return map.computeIfAbsent(key, k -> Binary.of(apply, Long.MAX_VALUE)).getF1();
   }
 
   @Override
   public V computeIfAbsent(K key, Function<? super K, ? extends V> mappingFunction, long timeout, TimeUnit timeunit) {
     long timeoutMills = timeunit.toMillis(timeout);
     V apply = mappingFunction.apply(key);
-    return map.computeIfAbsent(key, k -> new Binary<>(apply, System.currentTimeMillis() + timeoutMills)).getF1();
+    return map.computeIfAbsent(key, k -> Binary.of(apply, System.currentTimeMillis() + timeoutMills)).getF1();
   }
 
 }
