@@ -63,8 +63,7 @@ public class CacheHelper implements DisposableBean {
 
   private static final String BUILD_CACHE_SUCCESS_MSG = "构建缓存[{}][成功]. 获取到数据[{}], 缓存到期时间[{}]";
   private static final String PPF_BUILD_CACHE_MSG = "异步构建缓存[{}][{}]. 提交时间[{}], 最大执行耗时[{}ms], 开始执行时间[{}], 最大完成时间[{}], 完成时间[{}]";
-  private static final String PPF_SUBMIT_BUILD_CACHE_TASK_SUCCESS_MSG = "获取锁[{}][成功]. 提交了缓存重建任务, 返回过期数据[{}]";
-  private static final String PPF_SUBMIT_BUILD_CACHE_TASK_FAILED_MSG = "获取锁[{}][失败]. 未提交缓存重建任务, 返回过期数据[{}]";
+  private static final String PPF_SUBMIT_BUILD_CACHE_TASK_MSG = "获取锁[{}][{}]. [{}]缓存重建任务, 返回过期数据[{}]";
 
   private static final String RDF_TRY_LOCK_FAIL_TERMINAL_MSG = "xId[{}]第[{}]次未获取到锁[{}], 终止获取锁";
   private static final String RDF_TRY_LOCK_FAIL_WAIT_MSG = "xId[{}]第[{}]次未获取到锁[{}], 休眠[{}]ms";
@@ -206,11 +205,8 @@ public class CacheHelper implements DisposableBean {
                     expiredKVCache.delete(finalTake.getKey());
                     log.info(getDelayDeleteMsg(finalTake, "成功"));
                   }, cacheHelperEs), finalTake.getTimeout(), TimeUnit.MILLISECONDS)
-                  .whenComplete(
-                          (s, throwable) -> {
-                            if (throwable == null) {
-                              return;
-                            }
+                  .exceptionally(
+                          throwable -> {
                             if (throwable instanceof CompletionException && throwable.getCause() instanceof TimeoutException) {
                               // 超时的时候不再二次加入延迟队列了，因为此时服务的压力已经很大了
                               // 当线程池里有多个活跃线程时，日志里打印超时的同时任务有可能是执行成功
@@ -224,6 +220,7 @@ public class CacheHelper implements DisposableBean {
                                 log.error(getDelayDeleteMsg(finalTake, "异常且重试"), throwable);
                               }
                             }
+                            return null;
                           });
         } catch (RejectedExecutionException e) {
           if (take != null) {
@@ -267,6 +264,10 @@ public class CacheHelper implements DisposableBean {
     accept(keyPrefix, id, consumer, REALTIME_DATA_FIRST_PREFIX);
   }
 
+  /**
+   * 如果 consumer.accept(id) 内部有事务且异常且此方法外部也有事务。异常会被吞，进而导致外部事务回滚失败内部事务无法提交。
+   * 异常信息：Transaction rolled back because it has been marked as rollback-only
+   */
   private <I> void accept(String keyPrefix, I id, Consumer<I> consumer, String mode) {
     String key = formatKeyPrefix(keyPrefix) + mode + id;
     long now = System.currentTimeMillis();
@@ -282,6 +283,10 @@ public class CacheHelper implements DisposableBean {
     return apply(keyPrefix, id, function, REALTIME_DATA_FIRST_PREFIX);
   }
 
+  /**
+   * 如果 function.apply(id) 内部有事务且异常且此方法外部也有事务。异常会被吞，进而导致外部事务回滚失败内部事务无法提交。
+   * 异常信息：Transaction rolled back because it has been marked as rollback-only
+   */
   private <I, R> R apply(String keyPrefix, I id, Function<I, R> function, String mode) {
     String key = formatKeyPrefix(keyPrefix) + mode + id;
     long now = System.currentTimeMillis();
@@ -291,6 +296,11 @@ public class CacheHelper implements DisposableBean {
   }
 
   public void deleteCache(String key) {
+    doDelete(key, System.currentTimeMillis(), false);
+  }
+
+  public <I> void deleteCache(String keyPrefix, I id, String mode) {
+    String key = formatKeyPrefix(keyPrefix) + mode + id;
     doDelete(key, System.currentTimeMillis(), false);
   }
 
@@ -335,7 +345,8 @@ public class CacheHelper implements DisposableBean {
                 toDateTimeStr(taskStartMs),
                 toDateTimeStr(clearCacheStartMs),
                 toDateTimeStr(completeMs), delay,
-                "不", "延迟删除", currentDateTimeStr());
+                "不", "延迟删除", currentDateTimeStr(), e);
+        throw new CacheException(Slf4jUtils.format("延迟删除{}失败", key), e);
       }
     }
   }
@@ -402,7 +413,7 @@ public class CacheHelper implements DisposableBean {
       // 查询数据库
       R r = queryWithRdf(keyPrefix, id, rType, rtQuery, ttl, false);
       // 存在缓存里
-      setCacheData(key, r, ttl);
+      setPpfCacheData(key, r, ttl);
       return r;
     }
     // 2.2 缓存存在则进入逻辑过期的判断
@@ -430,7 +441,7 @@ public class CacheHelper implements DisposableBean {
             if (newDataReady.get()) {
               return newData.get();
             } else {
-              log.info(PPF_SUBMIT_BUILD_CACHE_TASK_SUCCESS_MSG, lockKey, data);
+              log.info(PPF_SUBMIT_BUILD_CACHE_TASK_MSG, "成功", "提交了", lockKey, data);
             }
           } finally {
             try {
@@ -443,7 +454,7 @@ public class CacheHelper implements DisposableBean {
         // 5.2 获取互斥锁，未成功不进行缓存重建
         else {
           lockAllocator.release(lockKey);
-          log.info(PPF_SUBMIT_BUILD_CACHE_TASK_FAILED_MSG, lockKey, data);
+          log.info(PPF_SUBMIT_BUILD_CACHE_TASK_MSG, "失败", "未提交", lockKey, data);
 
           // -----------------------------------------------------------
           // 提交重建的线程如果没有在等待时间内获取到新的数据，不会走下面的告警。
@@ -469,7 +480,7 @@ public class CacheHelper implements DisposableBean {
   private <R, I> void submitPpfRebuildTask(String key, I id, Long ttl, Function<I, R> rtQuery,
                                            AtomicBoolean newDataReady, AtomicReference<R> newData) {
     long now = System.currentTimeMillis();
-    cacheHelperEs.submit(() -> {
+    cacheHelperEs.execute(() -> {
       long start = System.currentTimeMillis();
       long maxCost = 2 * lockWaitTime;
       try {
@@ -478,7 +489,7 @@ public class CacheHelper implements DisposableBean {
         // 存在缓存里
         newData.set(r);
         newDataReady.set(true);
-        setCacheData(key, r, ttl);
+        setPpfCacheData(key, r, ttl);
         if (System.currentTimeMillis() - now > maxCost) {
           log.error(PPF_BUILD_CACHE_MSG, key, "超时", toDateTimeStr(now), maxCost, toDateTimeStr(start),
                   toDateTimeStr(now + maxCost), toDateTimeStr(System.currentTimeMillis()));
@@ -490,7 +501,7 @@ public class CacheHelper implements DisposableBean {
     });
   }
 
-  private <R> void setCacheData(String key, R r, long ttl) {
+  private <R> void setPpfCacheData(String key, R r, long ttl) {
     // 设置逻辑过期
     CacheData<R> newCacheData = new CacheData<>(r);
     if (r == null) {
@@ -503,6 +514,18 @@ public class CacheHelper implements DisposableBean {
     log.info(BUILD_CACHE_SUCCESS_MSG, key, r, toDateTimeStr(DateUtils.localDateTimeToTimestamp(newCacheData.getExpireTime())));
   }
 
+  private <R> void setRdfCacheData(String key, R r, long ttl) {
+    LocalDateTime expireTime = LocalDateTime.now();
+    if (r == null) {
+      long realTtl = Math.min(cacheNullTtl, ttl);
+      expireTime = expireTime.plus(realTtl, ChronoUnit.MILLIS);
+      expiredKVCache.set(key, NULL_OBJECT, realTtl, TimeUnit.MILLISECONDS);
+    } else {
+      expireTime = expireTime.plus(ttl, ChronoUnit.MILLIS);
+      expiredKVCache.set(key, JacksonUtils.toStr(r), ttl, TimeUnit.MILLISECONDS);
+    }
+    log.info(BUILD_CACHE_SUCCESS_MSG, key, r, toDateTimeStr(DateUtils.localDateTimeToTimestamp(expireTime)));
+  }
 
   /**
    * 实时数据优先的缓存查询方法，基于互斥锁实现。
@@ -604,16 +627,7 @@ public class CacheHelper implements DisposableBean {
       Supplier<R> supplier = () -> {
         R r = rtQuery.apply(id);
         if (cache) {
-          LocalDateTime expireTime = LocalDateTime.now();
-          if (r == null) {
-            long realTtl = Math.min(cacheNullTtl, ttl);
-            expireTime = expireTime.plus(realTtl, ChronoUnit.MILLIS);
-            expiredKVCache.set(key, NULL_OBJECT, realTtl, TimeUnit.MILLISECONDS);
-          } else {
-            expireTime = expireTime.plus(ttl, ChronoUnit.MILLIS);
-            expiredKVCache.set(key, JacksonUtils.toStr(r), ttl, TimeUnit.MILLISECONDS);
-          }
-          log.info(BUILD_CACHE_SUCCESS_MSG, key, r, toDateTimeStr(DateUtils.localDateTimeToTimestamp(expireTime)));
+          setRdfCacheData(key, r, ttl);
         }
         return r;
       };
@@ -668,9 +682,9 @@ public class CacheHelper implements DisposableBean {
 
   private String getLockKey(String keyPrefix, String key) {
     if (CONCURRENCY_GRANULARITY_PREFIX.equals(concurrencyGranularity)) {
-      return StringUtils.biTrimSpecifiedChar(keyPrefix, ':') + ":lock";
+      return String.join(":", StringUtils.biTrimSpecifiedChar(keyPrefix, ':'), "lock");
     } else if (CONCURRENCY_GRANULARITY_KEY.equals(concurrencyGranularity)) {
-      return StringUtils.biTrimSpecifiedChar(keyPrefix, ':') + ":" + StringUtils.biTrimSpecifiedChar(key, ':') + ":lock";
+      return String.join(":", StringUtils.biTrimSpecifiedChar(keyPrefix, ':'), StringUtils.biTrimSpecifiedChar(key, ':'), "lock");
     }
     throw SystemException.unExpectedException();
   }

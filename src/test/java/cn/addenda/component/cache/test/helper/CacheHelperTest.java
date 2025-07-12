@@ -147,9 +147,44 @@ public class CacheHelperTest {
     cacheHelper.acceptWithRdf(userCachePrefix, userId, s -> service.deleteUser(userId));
   }
 
-
   @Test
   public void test3() {
+    // 此类初始化耗时
+    UUID.randomUUID().toString();
+
+    // insert 不走缓存
+    service.insertUser(User.newUser("Q1"));
+    printSeparator();
+
+    User userFromDb1 = queryByRdf("Q1");
+    userFromDb1 = queryByRdf("Q1");
+    log.info(userFromDb1 != null ? userFromDb1.toString() : null);
+    printSeparator();
+
+    updateUserName2("Q1", "我被修改了！");
+    User userFromDb2 = queryByRdf("Q1");
+    log.info(userFromDb2 != null ? userFromDb2.toString() : null);
+    printSeparator();
+
+    deleteUser2("Q1");
+    User userFromDb3 = queryByRdf("Q1");
+    log.info(userFromDb3 != null ? userFromDb3.toString() : null);
+    printSeparator();
+
+    service.insertUser(User.newUser("Q1"));
+    printSeparator();
+
+    updateUserName2("Q1", "我被修改了2！");
+    User userFromDb5 = queryByRdf("Q1");
+    log.info(userFromDb5 != null ? userFromDb5.toString() : null);
+    printSeparator();
+
+    SleepUtils.sleep(TimeUnit.SECONDS, 1);
+  }
+
+
+  @Test
+  public void test4() {
     service.insertUser(User.newUser("Q2"));
 
     Thread[] threads = new Thread[20];
