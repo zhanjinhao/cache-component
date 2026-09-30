@@ -63,7 +63,8 @@ Thumbs.db
 
 
 
-src/test/resources/redis.properties
+src/test/resources/redis_standalone.properties
+src/test/resources/redis_cluster.properties
 src/test/resources/db.properties
 src/logs/*
 src/logs*

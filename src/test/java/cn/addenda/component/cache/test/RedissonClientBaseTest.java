@@ -4,7 +4,6 @@ import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
 import org.redisson.config.Config;
 
-import java.io.FileInputStream;
 import java.util.Properties;
 
 /**
@@ -14,11 +13,7 @@ import java.util.Properties;
 public class RedissonClientBaseTest {
 
   public static RedissonClient redissonClient() throws Exception {
-    String path = RedissonClientBaseTest.class.getClassLoader()
-            .getResource("redis.properties").getPath();
-
-    Properties properties = new Properties();
-    properties.load(new FileInputStream(path));
+    Properties properties = RedisTestProperties.loadStandaloneProperties();
 
     // 配置
     Config config = new Config();
