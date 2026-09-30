@@ -15,6 +15,7 @@
     <redisson.version>3.43.0</redisson.version>
     <spring.version>5.3.23</spring.version>
     <spring-data-redis.version>2.7.18</spring-data-redis.version>
+    <lettuce.version>6.8.2.RELEASE</lettuce.version>
     <guava.version>31.1-jre</guava.version>
     <slf4j.version>2.0.16</slf4j.version>
     <lombok.version>1.18.36</lombok.version>
@@ -42,6 +43,11 @@
         <groupId>org.springframework.data</groupId>
         <artifactId>spring-data-redis</artifactId>
         <version>${spring-data-redis.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.lettuce</groupId>
+        <artifactId>lettuce-core</artifactId>
+        <version>${lettuce.version}</version>
       </dependency>
       <dependency>
         <groupId>com.google.guava</groupId>
@@ -83,6 +89,10 @@
     <dependency>
       <groupId>org.redisson</groupId>
       <artifactId>redisson</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.lettuce</groupId>
+      <artifactId>lettuce-core</artifactId>
     </dependency>
     <dependency>
       <groupId>org.springframework.data</groupId>
