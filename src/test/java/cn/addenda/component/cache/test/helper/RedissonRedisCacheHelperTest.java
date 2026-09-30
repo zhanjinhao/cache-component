@@ -15,6 +15,7 @@ import org.redisson.api.RedissonClient;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.util.Arrays;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -50,21 +51,34 @@ public class RedissonRedisCacheHelperTest {
 
   public static final String userCachePrefix = "user:";
 
+  /**
+   * 每次运行用唯一 id。
+   * <p/>
+   * 原来写死 "Q1"/"Q2"，而缓存在共享的 redis 里：删掉数据后 {@code setRdfCacheData}
+   * 会写一个 {@code _NIL} 空值占位，TTL 是 {@code min(cacheNullTtl, ttl)}（默认 5 分钟）。
+   * 下一次运行再查同一个 id 就命中这个占位符、直接返回 null。
+   */
+  private String uniqueUserId() {
+    return "U" + UUID.randomUUID().toString().replace("-", "");
+  }
+
   @Test
   public void test() {
-    // insert 不走缓存
-    service.insertUser(User.newUser("Q1"));
+    String userId = uniqueUserId();
 
-    User userFromDb1 = queryByPpf("Q1");
-    userFromDb1 = queryByPpf("Q1");
+    // insert 不走缓存
+    service.insertUser(User.newUser(userId));
+
+    User userFromDb1 = queryByPpf(userId);
+    userFromDb1 = queryByPpf(userId);
     log.info(userFromDb1 != null ? userFromDb1.toString() : null);
 
-    updateUserName("Q1", "我被修改了！");
-    User userFromDb2 = queryByPpf("Q1");
+    updateUserName(userId, "我被修改了！");
+    User userFromDb2 = queryByPpf(userId);
     log.info(userFromDb2 != null ? userFromDb2.toString() : null);
 
-    deleteUser("Q1");
-    User userFromDb3 = queryByPpf("Q1");
+    deleteUser(userId);
+    User userFromDb3 = queryByPpf(userId);
     log.info(userFromDb3 != null ? userFromDb3.toString() : null);
   }
 
@@ -85,18 +99,20 @@ public class RedissonRedisCacheHelperTest {
 
   @Test
   public void test2() {
-    // insert 不走缓存
-    service.insertUser(User.newUser("Q2"));
+    String userId = uniqueUserId();
 
-    User userFromDb1 = queryByRdf("Q2");
+    // insert 不走缓存
+    service.insertUser(User.newUser(userId));
+
+    User userFromDb1 = queryByRdf(userId);
     log.info(userFromDb1.toString());
 
-    updateUserName2("Q2", "我被修改了！");
-    User userFromDb2 = queryByRdf("Q2");
+    updateUserName2(userId, "我被修改了！");
+    User userFromDb2 = queryByRdf(userId);
     log.info(userFromDb2.toString());
 
-    deleteUser2("Q2");
-    User userFromDb3 = queryByRdf("Q2");
+    deleteUser2(userId);
+    User userFromDb3 = queryByRdf(userId);
     log.info(userFromDb3 != null ? userFromDb3.toString() : null);
   }
 
@@ -118,12 +134,13 @@ public class RedissonRedisCacheHelperTest {
 
   @Test
   public void test3() {
-    service.insertUser(User.newUser("Q2"));
+    String userId = uniqueUserId();
+    service.insertUser(User.newUser(userId));
 
     Thread[] threads = new Thread[20];
     for (int i = 0; i < 20; i++) {
       threads[i] = new Thread(() -> {
-        User user = queryByRdf("Q2");
+        User user = queryByRdf(userId);
       });
     }
 
