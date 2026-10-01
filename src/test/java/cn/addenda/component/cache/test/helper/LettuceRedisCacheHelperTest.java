@@ -147,7 +147,7 @@ public class LettuceRedisCacheHelperTest {
     AtomicInteger queryCounter = new AtomicInteger();
 
     Assert.assertNotNull(queryByRdf(userId, queryCounter));
-    cacheHelper.deleteCache(USER_CACHE_PREFIX, userId, CacheHelper.REALTIME_DATA_FIRST_PREFIX);
+    cacheHelper.deleteWithDelayedDeletion(USER_CACHE_PREFIX, userId, CacheHelper.REALTIME_DATA_FIRST_PREFIX);
 
     Assert.assertNotNull(queryByRdf(userId, queryCounter));
     Assert.assertEquals(2, queryCounter.get());
@@ -348,6 +348,198 @@ public class LettuceRedisCacheHelperTest {
     Assert.assertNotNull("空值占位应该被写操作删除, 否则新数据在 cacheNullTtl 内读不到", user);
     Assert.assertEquals(userId + "姓名", user.getUsername());
     Assert.assertEquals(2, queryCounter.get());
+  }
+
+  // ------------------------------------------------------------------
+  // 底层缓存的直通方法（让业务方只注入 CacheHelper 一个 bean）
+  // ------------------------------------------------------------------
+
+  @Test
+  public void testKvCachePassthrough() {
+    String key = uniqueUserId();
+
+    Assert.assertFalse(cacheHelper.containsKey(key));
+    Assert.assertNull(cacheHelper.get(key));
+
+    cacheHelper.set(key, "v1");
+    Assert.assertTrue(cacheHelper.containsKey(key));
+    Assert.assertEquals("v1", cacheHelper.get(key));
+
+    // delete 返回"是否真的删掉了"
+    Assert.assertTrue(cacheHelper.delete(key));
+    Assert.assertFalse(cacheHelper.delete(key));
+    Assert.assertNull(cacheHelper.get(key));
+
+    Assert.assertEquals(Long.MAX_VALUE, cacheHelper.capacity());
+  }
+
+  @Test
+  public void testKvCachePassthroughWithTtl() throws Exception {
+    String key = uniqueUserId();
+    cacheHelper.set(key, "v", 200, TimeUnit.MILLISECONDS);
+    Assert.assertEquals("v", cacheHelper.get(key));
+
+    Thread.sleep(500);
+    Assert.assertNull(cacheHelper.get(key));
+  }
+
+  @Test
+  public void testKvCacheRemove() {
+    String key = uniqueUserId();
+    cacheHelper.set(key, "v");
+
+    Assert.assertEquals("v", cacheHelper.remove(key));
+    Assert.assertNull(cacheHelper.get(key));
+    Assert.assertFalse(cacheHelper.containsKey(key));
+  }
+
+  @Test
+  public void testKvCacheComputeIfAbsent() {
+    String key = uniqueUserId();
+    AtomicInteger counter = new AtomicInteger();
+
+    Assert.assertEquals("v1",
+            cacheHelper.computeIfAbsent(key, k -> "v" + counter.incrementAndGet(), 1, TimeUnit.MINUTES));
+    Assert.assertEquals("v1",
+            cacheHelper.computeIfAbsent(key, k -> "v" + counter.incrementAndGet(), 1, TimeUnit.MINUTES));
+    Assert.assertEquals("计算函数只应该被调用一次", 1, counter.get());
+
+    // 不带 ttl 的重载命中同一个 key
+    Assert.assertEquals("v1", cacheHelper.computeIfAbsent(key, k -> "v" + counter.incrementAndGet()));
+    Assert.assertEquals(1, counter.get());
+  }
+
+  /**
+   * size() 在 redis 实现下不支持
+   */
+  @Test(expected = UnsupportedOperationException.class)
+  public void testKvCacheSizeUnsupported() {
+    cacheHelper.size();
+  }
+
+  /**
+   * 直通方法和 queryWithXxx 操作的是同一套 key —— 前者传完整 key，后者自己拼 keyPrefix + mode + id。
+   * <p/>
+   * 这个用例是为了钉住"两边不会各用一套 key 空间"。
+   */
+  @Test
+  public void testPassthroughSharesKeySpaceWithQueryApi() {
+    String userId = uniqueUserId();
+
+    cacheHelper.queryWithPpf(USER_CACHE_PREFIX, userId, User.class, id -> User.newUser(id), 60000L);
+
+    String composedKey = USER_CACHE_PREFIX + CacheHelper.PERFORMANCE_FIRST_PREFIX + userId;
+    Assert.assertNotNull("直通 get 应该能读到 queryWithPpf 写的缓存", cacheHelper.get(composedKey));
+
+    Assert.assertTrue(cacheHelper.delete(composedKey));
+    Assert.assertNull(cacheHelper.get(composedKey));
+  }
+
+  // ---- (keyPrefix, id) 重载 ----
+
+  @Test
+  public void testKeyPrefixIdOverloads() {
+    String userId = uniqueUserId();
+
+    Assert.assertFalse(cacheHelper.containsKey(USER_CACHE_PREFIX, userId));
+    Assert.assertNull(cacheHelper.get(USER_CACHE_PREFIX, userId));
+
+    cacheHelper.set(USER_CACHE_PREFIX, userId, "v1");
+    Assert.assertTrue(cacheHelper.containsKey(USER_CACHE_PREFIX, userId));
+    Assert.assertEquals("v1", cacheHelper.get(USER_CACHE_PREFIX, userId));
+
+    Assert.assertTrue(cacheHelper.delete(USER_CACHE_PREFIX, userId));
+    Assert.assertFalse(cacheHelper.delete(USER_CACHE_PREFIX, userId));
+    Assert.assertNull(cacheHelper.get(USER_CACHE_PREFIX, userId));
+  }
+
+  @Test
+  public void testKeyPrefixIdOverloadsWithTtl() throws Exception {
+    String userId = uniqueUserId();
+    cacheHelper.set(USER_CACHE_PREFIX, userId, "v", 200, TimeUnit.MILLISECONDS);
+    Assert.assertEquals("v", cacheHelper.get(USER_CACHE_PREFIX, userId));
+
+    Thread.sleep(500);
+    Assert.assertNull(cacheHelper.get(USER_CACHE_PREFIX, userId));
+  }
+
+  @Test
+  public void testKeyPrefixIdRemove() {
+    String userId = uniqueUserId();
+    cacheHelper.set(USER_CACHE_PREFIX, userId, "v");
+
+    Assert.assertEquals("v", cacheHelper.remove(USER_CACHE_PREFIX, userId));
+    Assert.assertNull(cacheHelper.get(USER_CACHE_PREFIX, userId));
+    Assert.assertFalse(cacheHelper.containsKey(USER_CACHE_PREFIX, userId));
+  }
+
+  /**
+   * mappingFunction 收到的是 id（不是拼好的完整 key）
+   */
+  @Test
+  public void testKeyPrefixIdComputeIfAbsent() {
+    String userId = uniqueUserId();
+    AtomicInteger counter = new AtomicInteger();
+
+    Assert.assertEquals("computed-" + userId,
+            cacheHelper.computeIfAbsent(USER_CACHE_PREFIX, userId, id -> {
+              counter.incrementAndGet();
+              return "computed-" + id;
+            }, 1, TimeUnit.MINUTES));
+
+    Assert.assertEquals("computed-" + userId,
+            cacheHelper.computeIfAbsent(USER_CACHE_PREFIX, userId, id -> {
+              counter.incrementAndGet();
+              return "computed-" + id;
+            }, 1, TimeUnit.MINUTES));
+    Assert.assertEquals("计算函数只应该被调用一次", 1, counter.get());
+
+    // 不带 ttl 的重载命中同一个 key
+    Assert.assertEquals("computed-" + userId,
+            cacheHelper.computeIfAbsent(USER_CACHE_PREFIX, userId, id -> {
+              counter.incrementAndGet();
+              return "computed-" + id;
+            }));
+    Assert.assertEquals(1, counter.get());
+  }
+
+  /**
+   * keyPrefix 会被规范化（去掉首尾冒号再补一个），下面三种写法等价
+   */
+  @Test
+  public void testKeyPrefixNormalization() {
+    String userId = uniqueUserId();
+
+    cacheHelper.set("user:", userId, "v");
+    Assert.assertEquals("v", cacheHelper.get("user", userId));
+    Assert.assertEquals("v", cacheHelper.get(":user:", userId));
+
+    cacheHelper.delete("user", userId);
+    Assert.assertNull(cacheHelper.get("user:", userId));
+  }
+
+  /**
+   * 把 mode 放进 keyPrefix，就能操作 queryWithXxx 写入的缓存。
+   * <p/>
+   * 这是这组重载最实用的场景：直通删除一个由 CacheHelper 管理的缓存项。
+   */
+  @Test
+  public void testKeyPrefixIdCanTargetQueryWrittenCache() {
+    String userId = uniqueUserId();
+    service.insertUser(User.newUser(userId));
+    cacheHelper.queryWithPpf(USER_CACHE_PREFIX, userId, User.class, service::queryBy, 60000L);
+
+    // "user:" + "pff:" = "user:pff:"，正好是 queryWithPpf 用的 key
+    String prefixWithMode = USER_CACHE_PREFIX + CacheHelper.PERFORMANCE_FIRST_PREFIX;
+    Assert.assertNotNull("应该能读到 queryWithPpf 写的缓存", cacheHelper.get(prefixWithMode, userId));
+
+    Assert.assertTrue(cacheHelper.delete(prefixWithMode, userId));
+    Assert.assertNull(cacheHelper.get(prefixWithMode, userId));
+
+    // 删掉之后重新查库
+    AtomicInteger queryCounter = new AtomicInteger();
+    Assert.assertNotNull(queryByPpf(userId, queryCounter));
+    Assert.assertEquals(1, queryCounter.get());
   }
 
   private User queryByPpf(String userId) {

@@ -295,13 +295,204 @@ public class CacheHelper implements DisposableBean {
     return apply;
   }
 
-  public void deleteCache(String key) {
+  /**
+   * 删除缓存，并注册一个延迟删除任务补偿一次，防止并发场景下旧值被回填。
+   * <p/>
+   * 立即删除带重试，延迟删除的延迟时长取 {@code 2 × 本次删除耗时}。
+   * <p/>
+   * 和 {@link #delete(String)} 的区别：那个是最底层的删除，不重试也不延迟。
+   *
+   * @param key 完整的 key
+   */
+  public void deleteWithDelayedDeletion(String key) {
     doDelete(key, System.currentTimeMillis(), false);
   }
 
-  public <I> void deleteCache(String keyPrefix, I id, String mode) {
+  /**
+   * 删除缓存，并注册一个延迟删除任务补偿一次，防止并发场景下旧值被回填。
+   *
+   * @param keyPrefix 与 id 一起构成完整的键
+   * @param id        键值
+   * @param mode      {@link #PERFORMANCE_FIRST_PREFIX} 或 {@link #REALTIME_DATA_FIRST_PREFIX}
+   */
+  public <I> void deleteWithDelayedDeletion(String keyPrefix, I id, String mode) {
     String key = formatKeyPrefix(keyPrefix) + mode + id;
     doDelete(key, System.currentTimeMillis(), false);
+  }
+
+  // ------------------------------------------------------------------
+  // 底层缓存的直通方法
+  //
+  // 这些方法原样转发给底层 ExpiredKVCache，暴露出来是为了业务方只注入
+  // CacheHelper 一个 bean 就够了，不用再引入 KVCache bean。
+  //
+  // 传的是【完整的 key】，不做 keyPrefix / mode 的拼接 ——
+  // keyPrefix 拼接是上面 queryWithXxx / acceptWithXxx 系列做的事。
+  // ------------------------------------------------------------------
+
+  /**
+   * 写入缓存，<b>永不过期</b>。
+   * <p/>
+   * ⚠️ 不设 ttl 意味着这个 key 会一直留在 redis 里。
+   * 业务自定义的 key 不在 CacheHelper 的删除逻辑管辖范围内，需要自己清理。
+   * 除非确实需要永不过期，否则用 {@link #set(String, String, long, TimeUnit)}。
+   */
+  public void set(String key, String value) {
+    expiredKVCache.set(key, value);
+  }
+
+  /**
+   * 写入缓存并设置过期时间。
+   */
+  public void set(String key, String value, long timeout, TimeUnit timeunit) {
+    expiredKVCache.set(key, value, timeout, timeunit);
+  }
+
+  /**
+   * @param key 完整的 key
+   */
+  public boolean containsKey(String key) {
+    return expiredKVCache.containsKey(key);
+  }
+
+  /**
+   * @param key 完整的 key
+   */
+  public String get(String key) {
+    return expiredKVCache.get(key);
+  }
+
+  /**
+   * 删除缓存，返回是否删掉了。
+   * <p/>
+   * 和 {@link #deleteWithDelayedDeletion(String)} 的区别：那个会走重试 + 延迟删除，
+   * 这个是最底层的删除。需要缓存一致性保障时用前者。
+   *
+   * @param key 完整的 key
+   */
+  public boolean delete(String key) {
+    return expiredKVCache.delete(key);
+  }
+
+  /**
+   * get & delete
+   *
+   * @param key 完整的 key
+   */
+  public String remove(String key) {
+    return expiredKVCache.remove(key);
+  }
+
+  /**
+   * @param key 完整的 key
+   */
+  public String computeIfAbsent(String key, Function<? super String, ? extends String> mappingFunction) {
+    return expiredKVCache.computeIfAbsent(key, mappingFunction);
+  }
+
+  /**
+   * @param key 完整的 key
+   */
+  public String computeIfAbsent(String key, Function<? super String, ? extends String> mappingFunction,
+                                long timeout, TimeUnit timeunit) {
+    return expiredKVCache.computeIfAbsent(key, mappingFunction, timeout, timeunit);
+  }
+
+  /**
+   * @see ExpiredKVCache#size()
+   * @throws UnsupportedOperationException redis 实现不支持
+   */
+  public long size() {
+    return expiredKVCache.size();
+  }
+
+  /**
+   * @see ExpiredKVCache#capacity()
+   */
+  public long capacity() {
+    return expiredKVCache.capacity();
+  }
+
+  // ---- 下面这组是 (keyPrefix, id) 版本，key 由 {@code <去冒号的keyPrefix>:<id>} 拼出 ----
+  //
+  // 想操作 queryWithXxx 写入的缓存时，把 mode 放进 keyPrefix 即可，
+  // 比如 get("user:pff:", userId) 读的就是 queryWithPpf("user:", userId, ...) 写的那个 key。
+
+  /**
+   * @param keyPrefix 与 id 一起构成完整的键
+   * @param id        键值
+   */
+  public <I> void set(String keyPrefix, I id, String value) {
+    expiredKVCache.set(formatKey(keyPrefix, id), value);
+  }
+
+  /**
+   * @param keyPrefix 与 id 一起构成完整的键
+   * @param id        键值
+   */
+  public <I> void set(String keyPrefix, I id, String value, long timeout, TimeUnit timeunit) {
+    expiredKVCache.set(formatKey(keyPrefix, id), value, timeout, timeunit);
+  }
+
+  /**
+   * @param keyPrefix 与 id 一起构成完整的键
+   * @param id        键值
+   */
+  public <I> boolean containsKey(String keyPrefix, I id) {
+    return expiredKVCache.containsKey(formatKey(keyPrefix, id));
+  }
+
+  /**
+   * @param keyPrefix 与 id 一起构成完整的键
+   * @param id        键值
+   */
+  public <I> String get(String keyPrefix, I id) {
+    return expiredKVCache.get(formatKey(keyPrefix, id));
+  }
+
+  /**
+   * 删除缓存，返回是否删掉了。
+   * <p/>
+   * 和 {@link #deleteWithDelayedDeletion(String, Object, String)} 的区别：那个会走重试 + 延迟删除，
+   * 这个是最底层的删除。
+   *
+   * @param keyPrefix 与 id 一起构成完整的键
+   * @param id        键值
+   */
+  public <I> boolean delete(String keyPrefix, I id) {
+    return expiredKVCache.delete(formatKey(keyPrefix, id));
+  }
+
+  /**
+   * get & delete
+   *
+   * @param keyPrefix 与 id 一起构成完整的键
+   * @param id        键值
+   */
+  public <I> String remove(String keyPrefix, I id) {
+    return expiredKVCache.remove(formatKey(keyPrefix, id));
+  }
+
+  /**
+   * @param keyPrefix       与 id 一起构成完整的键
+   * @param id              键值，会传给 mappingFunction
+   * @param mappingFunction 缓存不存在时用来构建值
+   */
+  public <I> String computeIfAbsent(String keyPrefix, I id,
+                                    Function<? super I, ? extends String> mappingFunction) {
+    return expiredKVCache.computeIfAbsent(formatKey(keyPrefix, id), unused -> mappingFunction.apply(id));
+  }
+
+  /**
+   * @param keyPrefix       与 id 一起构成完整的键
+   * @param id              键值，会传给 mappingFunction
+   * @param mappingFunction 缓存不存在时用来构建值
+   */
+  public <I> String computeIfAbsent(String keyPrefix, I id,
+                                    Function<? super I, ? extends String> mappingFunction,
+                                    long timeout, TimeUnit timeunit) {
+    return expiredKVCache.computeIfAbsent(formatKey(keyPrefix, id), unused -> mappingFunction.apply(id),
+            timeout, timeunit);
   }
 
   private void doDelete(String key, long taskStartMs, boolean ifDelayedDeletion) {
@@ -838,6 +1029,13 @@ public class CacheHelper implements DisposableBean {
 
   private String formatKeyPrefix(String a) {
     return StringUtils.biTrimSpecifiedChar(a, ':') + ":";
+  }
+
+  /**
+   * 和 {@link #formatKeyPrefix} 配套：{@code <去冒号的keyPrefix>:<id>}
+   */
+  private String formatKey(String keyPrefix, Object id) {
+    return formatKeyPrefix(keyPrefix) + id;
   }
 
   private void assertRType(Class<?> rType) {

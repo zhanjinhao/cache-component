@@ -144,7 +144,7 @@ public class LettuceRedisClusterCacheHelperTest {
     AtomicInteger queryCounter = new AtomicInteger();
 
     Assert.assertNotNull(queryByRdf(userId, queryCounter));
-    cacheHelper.deleteCache(USER_CACHE_PREFIX, userId, CacheHelper.REALTIME_DATA_FIRST_PREFIX);
+    cacheHelper.deleteWithDelayedDeletion(USER_CACHE_PREFIX, userId, CacheHelper.REALTIME_DATA_FIRST_PREFIX);
 
     Assert.assertNotNull(queryByRdf(userId, queryCounter));
     Assert.assertEquals(2, queryCounter.get());
