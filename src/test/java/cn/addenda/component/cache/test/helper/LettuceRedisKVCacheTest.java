@@ -137,6 +137,37 @@ public class LettuceRedisKVCacheTest {
     Assert.assertFalse(kvCache.delete(uniqueKey()));
   }
 
+  /**
+   * set(k, null) 等价于删除 —— redis 里没有 java null 值。
+   * <p/>
+   * 不对齐的话 lettuce 会把 null 编码成<b>空串</b>，get 返回 ""，
+   * 等于把业务写进去的 null 静默换成了另一个值。Redisson 和内存实现都不会这样。
+   */
+  @Test
+  public void testSetNullMeansDelete() {
+    String key = uniqueKey();
+    kvCache.set(key, "v");
+    Assert.assertTrue(kvCache.containsKey(key));
+
+    kvCache.set(key, null);
+    Assert.assertNull("写 null 之后 get 应该返回 null", kvCache.get(key));
+    Assert.assertFalse("写 null 等价于删除", kvCache.containsKey(key));
+  }
+
+  /**
+   * 带 ttl 的重载行为一致：写 null 也当删除
+   */
+  @Test
+  public void testSetNullWithTimeoutMeansDelete() {
+    String key = uniqueKey();
+    kvCache.set(key, "v", 1, TimeUnit.MINUTES);
+    Assert.assertTrue(kvCache.containsKey(key));
+
+    kvCache.set(key, null, 1, TimeUnit.MINUTES);
+    Assert.assertNull(kvCache.get(key));
+    Assert.assertFalse(kvCache.containsKey(key));
+  }
+
   @Test
   public void testRemove() {
     String key = uniqueKey();

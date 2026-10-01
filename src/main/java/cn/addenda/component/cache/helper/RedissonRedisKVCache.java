@@ -21,12 +21,22 @@ public class RedissonRedisKVCache implements ExpiredKVCache<String, String> {
   @Override
   public void set(String key, String value) {
     RBucket<Object> bucket = redissonClient.getBucket(key);
+    // 见 KVCache#set：写 null 一律当删除。
+    // redisson 的 bucket.set(null) 恰好也是删除，但显式写出来不依赖它的实现细节。
+    if (value == null) {
+      bucket.delete();
+      return;
+    }
     bucket.set(value);
   }
 
   @Override
   public void set(String key, String value, long timeout, TimeUnit unit) {
     RBucket<Object> bucket = redissonClient.getBucket(key);
+    if (value == null) {
+      bucket.delete();
+      return;
+    }
     bucket.set(value, timeout, unit);
   }
 

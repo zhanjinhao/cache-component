@@ -49,11 +49,23 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
 
   @Override
   public void set(String key, String value) {
+    if (value == null) {
+      // redis 里没有 java null 值。写 null 语义上就是"没有值"，等价于把这个 key 删掉 ——
+      // 这样 get 返回 null，和 {@link ExpiredHashMapKVCache}、RedissonRedisKVCache 对齐。
+      // 不这么做的话 lettuce 会把 null 编码成空串，get 出来是 ""，等于静默篡改数据。
+      commands.del(key);
+      return;
+    }
     commands.set(key, value);
   }
 
   @Override
   public void set(String key, String value, long timeout, TimeUnit unit) {
+    if (value == null) {
+      // 同上：写 null 就是删掉，带不带 ttl 都一样
+      commands.del(key);
+      return;
+    }
     // lettuce只提供了秒级的setex，使用psetex以支持毫秒级的ttl
     commands.psetex(key, toRedisMillis(timeout, unit), value);
   }

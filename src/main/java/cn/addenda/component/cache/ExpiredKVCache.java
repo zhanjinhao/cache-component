@@ -7,8 +7,12 @@ import java.util.function.Function;
 public interface ExpiredKVCache<K, V> extends KVCache<K, V> {
 
   /**
+   * 写入缓存并设置过期时间。
+   * <p/>
+   * <b>v 为 null 时表示"没有值"，一律当作删除这个 key 处理</b>，语义同 {@link KVCache#set(Object, Object)}。
+   *
    * @param k        key
-   * @param v        value
+   * @param v        value，为 null 时等价于 {@link KVCache#delete(Object)}
    * @param timeout  过期时间
    * @param timeunit 过期时间单位
    */

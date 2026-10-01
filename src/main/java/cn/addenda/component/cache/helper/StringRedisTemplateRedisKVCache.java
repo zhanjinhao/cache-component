@@ -19,11 +19,23 @@ public class StringRedisTemplateRedisKVCache implements ExpiredKVCache<String, S
 
   @Override
   public void set(String key, String value) {
+    // 见 KVCache#set：写 null 一律当删除。
+    // 直接调 opsForValue().set(key, null) 的话 spring-data-redis 会抛
+    // IllegalArgumentException("Value must not be null!")。
+    if (value == null) {
+      stringRedisTemplate.delete(key);
+      return;
+    }
     stringRedisTemplate.opsForValue().set(key, value);
   }
 
   @Override
   public void set(String key, String value, long timeout, TimeUnit unit) {
+    // 同上
+    if (value == null) {
+      stringRedisTemplate.delete(key);
+      return;
+    }
     stringRedisTemplate.opsForValue().set(key, value, timeout, unit);
   }
 
