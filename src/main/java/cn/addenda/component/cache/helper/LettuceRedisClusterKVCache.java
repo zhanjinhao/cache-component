@@ -20,6 +20,9 @@ import java.util.concurrent.TimeUnit;
  * <p/>
  * 注意 cluster 模式下 {@link StatefulRedisClusterConnection} 是个门面，背后按节点各持一条连接，
  * 单个 command 仍按 key 的 slot 路由，不存在跨 slot 问题。
+ * <p/>
+ * <b>线程安全</b>：字段全是 final、没有自有可变状态，所有操作都委托给线程安全的
+ * {@link StatefulRedisClusterConnection}，所以整个对象可以被多线程共享。
  *
  * @author addenda
  */

@@ -10,7 +10,9 @@ import java.util.concurrent.TimeUnit;
 /**
  * 基于Lettuce实现的KVCache。
  * <p/>
- * Lettuce的连接是线程安全的，所以整个对象可以被多个线程共享使用。
+ * <b>线程安全</b>：字段全是 final、没有自有可变状态，所有操作都委托给线程安全的
+ * {@link StatefulRedisConnection}（它内部把命令写进同一个 channel 的 FIFO 队列，
+ * 响应按序回来，多线程可以共享一条连接），所以整个对象可以被多线程共享使用。
  *
  * @author addenda
  * @since 2023/6/3 16:25
