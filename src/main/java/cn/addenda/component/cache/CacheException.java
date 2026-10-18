@@ -3,6 +3,8 @@ package cn.addenda.component.cache;
 import cn.addenda.component.base.exception.SystemException;
 
 /**
+ * 缓存模块的统一异常，继承自 {@link SystemException}。
+ *
  * @author addenda
  * @since 2023/05/30 19:16
  */

@@ -1,264 +1,400 @@
 package cn.addenda.component.cache.test;
 
 import cn.addenda.component.base.util.SleepUtils;
+import cn.addenda.component.cache.ConcurrentHashMapKVCache;
+import cn.addenda.component.cache.ExpiredConcurrentHashMapKVCache;
 import cn.addenda.component.cache.ExpiredHashMapKVCache;
-import cn.addenda.component.cache.ExpiredKVCache;
-import cn.addenda.component.cache.helper.LettuceRedisClusterKVCache;
-import cn.addenda.component.cache.helper.LettuceRedisKVCache;
-import cn.addenda.component.cache.helper.RedissonRedisKVCache;
+import cn.addenda.component.cache.HashMapKVCache;
+import cn.addenda.component.cache.KVCache;
+import cn.addenda.component.cache.TreeMapKVCache;
 import cn.addenda.component.cache.SynchronizedExpiredKVCache;
-import cn.addenda.component.cache.helper.StringRedisTemplateRedisKVCache;
-import io.lettuce.core.RedisClient;
-import io.lettuce.core.cluster.RedisClusterClient;
-import lombok.SneakyThrows;
+import cn.addenda.component.cache.SynchronizedKVCache;
+import cn.addenda.component.cache.SynchronizedSortedKVCache;
 import lombok.extern.slf4j.Slf4j;
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
-import org.redisson.api.RedissonClient;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.io.FileInputStream;
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * KVCache / ExpiredKVCache 的契约测试：同一组断言跑遍全部实现。
- * <p/>
- * 目前覆盖：
- * <ul>
- *   <li>{@code set(k, null)} 一律当删除 —— 调用后 get 返回 null、containsKey 返回 false</li>
- *   <li>{@code computeIfAbsent} 惰性求值（命中缓存时不调 mappingFunction），结果为 null 时不写入</li>
- * </ul>
- * <p/>
- * 为什么要跑遍实现而不是只测一个：这些契约最容易在某个实现上破功，
- * 而且破法都很隐蔽 —— "静默把值换掉"、"命中缓存还白算一次"，都不报错。
- * redis 那几家（lettuce / redisson / spring-data-redis）对 null 的天然行为各不相同，
- * 尤其容易走偏。
+ * {@link KVCache}（不带 ttl 的那一层）的契约测试。
+ * <p>
+ * 和 {@link ExpiredKVCacheContractTest} 分开的原因：那边测的是 {@code ExpiredKVCache}，
+ * 纯 {@code KVCache} 的实现（比如 {@link TreeMapKVCache}）没有带 ttl 的方法，进不了那边的列表。
+ * <p>
+ * 每次 {@code before()} 都会覆盖<b>九个</b>实例：{@link HashMapKVCache}、{@link TreeMapKVCache}、
+ * {@link ConcurrentHashMapKVCache}，包了 {@link SynchronizedKVCache} 的 HashMap / TreeMap
+ * 与包了 {@link SynchronizedSortedKVCache} 的 TreeMap 各一个，外加三个带 TTL 的实现
+ * （见 {@code before()} 里那段说明 —— 不走 TTL 入口时它们就是普通的 {@code KVCache}）。
+ * <p>
+ * <b>四个 redis 实现不在这里，是有意的。</b>它们同样是 {@code KVCache}，但 KVCache 层那组断言
+ * （set / get / delete 往返、setnx 的四种输入组合、key 为 null 一律拒绝、remove 返回旧值……）
+ * 已经由 {@link ExpiredKVCacheContractTest} 在同一批实现上逐条跑过 —— 那边为了测 TTL 必须注册
+ * 它们，顺手就覆盖了继承来的那一层；再登记一遍，只是把同样的断言往同一批远程实例上重发一次。
+ * <p>
+ * 这是一条<b>靠人记着的边界</b>：真要按"每层一张清单"彻底重划分，该做的是把
+ * {@code ExpiredKVCacheContractTest} 里那几条 KVCache 层的用例挪过来，而不是在这里补注册。
  *
  * @author addenda
  */
 @Slf4j
 public class KVCacheContractTest {
 
-  private final List<ExpiredKVCache<String, String>> caches = new ArrayList<>();
+  /**
+   * 不承诺线程安全
+   */
+  private final List<KVCache<String, String>> caches = new ArrayList<>();
 
   /**
-   * 底层存储本身线程安全的那些 —— 按 {@link cn.addenda.component.cache.KVCache} 上的约定，
-   * 它们自己也必须线程安全，所以会被并发用例覆盖。
-   * <p/>
-   * {@code ExpiredHashMapKVCache} 不在这里：它底层是普通 HashMap，本来就不承诺线程安全。
+   * 实例自身承诺线程安全的那些：底层是并发容器的，或者包了 {@link SynchronizedKVCache} 的。
+   * <p>
+   * 注意后者的底层（HashMap / TreeMap）<b>本身并不线程安全</b>，安全性来自包装层。
    */
-  private final List<ExpiredKVCache<String, String>> threadSafeCaches = new ArrayList<>();
+  private final List<KVCache<String, String>> threadSafeCaches = new ArrayList<>();
 
-  private final List<AutoCloseable> resources = new ArrayList<>();
+  /**
+   * 不限制条数的那些：{@code capacity()} 返回 {@link KVCache#UNLIMITED_CAPACITY} 哨兵。
+   * <p>
+   * "哨兵统一"这条只对它们成立 —— 带真实容量的淘汰实现不属于这一类（它的 {@code capacity()}
+   * 就是构造时给的容量），将来加进来时按 {@code register(..., unbounded = false)} 登记即可。
+   */
+  private final List<KVCache<String, String>> unboundedCaches = new ArrayList<>();
 
-  @Before
-  @SneakyThrows
-  public void before() {
-    caches.add(new ExpiredHashMapKVCache<String, String>() {
-    });
-
-    RedisClient redisClient = RedisClientBaseTest.redisClient();
-    resources.add(redisClient::shutdown);
-    addThreadSafe(new LettuceRedisKVCache(redisClient));
-
-    RedisClusterClient clusterClient = RedisClusterClientBaseTest.redisClusterClient();
-    resources.add(clusterClient::shutdown);
-    addThreadSafe(new LettuceRedisClusterKVCache(clusterClient));
-
-    RedissonClient redissonClient = RedissonClientBaseTest.redissonClient();
-    resources.add(redissonClient::shutdown);
-    addThreadSafe(new RedissonRedisKVCache(redissonClient));
-
-    LettuceConnectionFactory factory = newConnectionFactory();
-    resources.add(factory::destroy);
-    StringRedisTemplate template = new StringRedisTemplate(factory);
-    template.afterPropertiesSet();
-    addThreadSafe(new StringRedisTemplateRedisKVCache(template));
-  }
-
-  private void addThreadSafe(ExpiredKVCache<String, String> cache) {
+  /**
+   * 登记一个实现，顺便声明它的两个性质 —— 用例按性质挑组跑：
+   * {@link #threadSafeCaches} 给线程安全用例，{@link #unboundedCaches} 给哨兵用例。
+   *
+   * @param threadSafe 它自身是否承诺线程安全
+   * @param unbounded  它是否不限制条数
+   */
+  private void register(KVCache<String, String> cache, boolean threadSafe, boolean unbounded) {
     caches.add(cache);
-    threadSafeCaches.add(cache);
-  }
-
-  @After
-  public void after() {
-    for (AutoCloseable resource : resources) {
-      try {
-        resource.close();
-      } catch (Exception e) {
-        log.error("释放资源失败", e);
-      }
+    if (threadSafe) {
+      threadSafeCaches.add(cache);
+    }
+    if (unbounded) {
+      unboundedCaches.add(cache);
     }
   }
 
+  @Before
+  public void before() {
+    // 自身不承诺线程安全的实现
+    register(new TreeMapKVCache<>(), false, true);
+    register(new HashMapKVCache<>(), false, true);
+
+    // 自身就承诺线程安全的实现（不依赖 SynchronizedKVCache 包装）
+    register(new ConcurrentHashMapKVCache<>(), true, true);
+
+    // 有序表的线程安全包装：底层 TreeMap 不线程安全，安全性来自包装层
+    register(SynchronizedSortedKVCache.synchronize(new TreeMapKVCache<>()), true, true);
+
+    // 靠 SynchronizedKVCache 包装获得线程安全的实现（底层 HashMap / TreeMap 本身不线程安全）
+    register(SynchronizedKVCache.synchronize(new HashMapKVCache<>()), true, true);
+    register(SynchronizedKVCache.synchronize(new TreeMapKVCache<>()), true, true);
+
+    // 带 TTL 的实现：不走 TTL 入口时（本类只走 {@code KVCache} 那几个方法），
+    // 它们的 set / get / delete / setnx / remove 与上面几个口径完全一致 ——
+    // 不带 TTL 的 set 就是"永不过期"，因此同样受本类的契约约束。
+    register(new ExpiredHashMapKVCache<>(), false, true);
+    register(new ExpiredConcurrentHashMapKVCache<>(), true, true);
+    register(SynchronizedExpiredKVCache.synchronize(new ExpiredHashMapKVCache<>()), true, true);
+  }
+
+  @Test
+  public void testSetGetDelete() {
+    for (KVCache<String, String> cache : caches) {
+      String name = cache.getClass().getSimpleName();
+      String key = uniqueKey(name);
+
+      cache.set(key, "v1");
+      Assert.assertEquals(name + ": 写进去应该能读出来", "v1", cache.get(key));
+      Assert.assertTrue(name + ": containsKey 应该是 true", cache.containsKey(key));
+
+      cache.set(key, "v2");
+      Assert.assertEquals(name + ": 覆盖写", "v2", cache.get(key));
+
+      Assert.assertTrue(name + ": delete 返回是否删掉了", cache.delete(key));
+      Assert.assertFalse(name + ": 再删一次应该返回 false", cache.delete(key));
+      Assert.assertNull(name + ": 删掉之后应该读不到", cache.get(key));
+    }
+  }
+
+  /**
+   * set(k, null) 一律当删除 —— 见 {@link KVCache#set} 上的契约。
+   */
   @Test
   public void testSetNullMeansDelete() {
-    for (ExpiredKVCache<String, String> cache : caches) {
+    for (KVCache<String, String> cache : caches) {
       String name = cache.getClass().getSimpleName();
       String key = uniqueKey(name);
 
       cache.set(key, "v");
-      Assert.assertTrue(name + ": 前置条件，先写进去一个值", cache.containsKey(key));
+      Assert.assertTrue(cache.containsKey(key));
 
       cache.set(key, null);
-      Assert.assertNull(name + ": set(k, null) 之后 get 应该返回 null", cache.get(key));
-      Assert.assertFalse(name + ": set(k, null) 应该等价于删除", cache.containsKey(key));
-
-      cache.delete(key);
+      Assert.assertNull(name + ": 写 null 之后 get 应该返回 null", cache.get(key));
+      Assert.assertFalse(name + ": 写 null 等价于删除", cache.containsKey(key));
     }
   }
 
+  /**
+   * setnx：key 不存在才写入
+   */
   @Test
-  public void testSetNullWithTimeoutMeansDelete() {
-    for (ExpiredKVCache<String, String> cache : caches) {
+  public void testSetnx() {
+    for (KVCache<String, String> cache : caches) {
       String name = cache.getClass().getSimpleName();
       String key = uniqueKey(name);
 
-      cache.set(key, "v", 1, TimeUnit.MINUTES);
-      Assert.assertTrue(name + ": 前置条件", cache.containsKey(key));
+      Assert.assertTrue(name + ": key 不存在时应该写入成功", cache.setnx(key, "v1"));
+      Assert.assertEquals("v1", cache.get(key));
 
-      cache.set(key, null, 1, TimeUnit.MINUTES);
-      Assert.assertNull(name + ": 带 ttl 的 set(k, null) 之后 get 应该返回 null", cache.get(key));
-      Assert.assertFalse(name + ": 带 ttl 的 set(k, null) 也应该等价于删除", cache.containsKey(key));
+      Assert.assertFalse(name + ": key 已存在时应该写入失败", cache.setnx(key, "v2"));
+      Assert.assertEquals(name + ": 已存在的值不应该被覆盖", "v1", cache.get(key));
+
+      cache.delete(key);
+      Assert.assertTrue(name + ": 删掉之后又能写了", cache.setnx(key, "v3"));
+    }
+  }
+
+  /**
+   * <b>set 和 setnx 对 null 的处理必须一致</b> —— value 为 null 在两边都表示"没有值"：
+   * set 是删除，setnx 是无事可做（不写入、返回 false），都不抛异常。
+   */
+  @Test
+  public void testNullValueMeansNoValue() {
+    for (KVCache<String, String> cache : caches) {
+      String name = cache.getClass().getSimpleName();
+      String key = uniqueKey(name);
+
+      cache.set(key, null);
+      Assert.assertFalse(name + ": set(key, null) 之后不应该存在", cache.containsKey(key));
+      Assert.assertFalse(name + ": setnx(key, null) 应该返回 false", cache.setnx(key, null));
+      Assert.assertFalse(name + ": setnx(key, null) 不应该写入", cache.containsKey(key));
+
+      // key 已存在时，setnx 的 null 不能把已有的值弄丢
+      cache.set(key, "v");
+      Assert.assertFalse(name + ": setnx(key, null) 应该返回 false", cache.setnx(key, null));
+      Assert.assertEquals(name + ": setnx(key, null) 不应该动已有值", "v", cache.get(key));
 
       cache.delete(key);
     }
   }
 
   /**
-   * computeIfAbsent 命中缓存时不应该再调 mappingFunction —— 和 {@code Map.computeIfAbsent} 一致。
-   * <p/>
-   * 之前 {@code ExpiredHashMapKVCache} 的实现是无条件先算再放进 map，
-   * 命中缓存时业务侧的计算函数照样执行，代价白付。
+   * key 为 null 一律拒绝，各方法表现一致。
+   */
+  @Test
+  public void testNullKeyRejected() {
+    for (KVCache<String, String> cache : caches) {
+      String name = cache.getClass().getSimpleName();
+
+      CacheAssertions.assertRejected(name + ": set", () -> cache.set(null, "v"));
+      CacheAssertions.assertRejected(name + ": setnx", () -> cache.setnx(null, "v"));
+      CacheAssertions.assertRejected(name + ": get", () -> cache.get(null));
+      CacheAssertions.assertRejected(name + ": containsKey", () -> cache.containsKey(null));
+      CacheAssertions.assertRejected(name + ": delete", () -> cache.delete(null));
+    }
+  }
+
+  /**
+   * <b>{@link KVCache} 的两个默认方法同样要拒绝 null key</b>，且口径与其它方法一致：
+   * 一律 {@link IllegalArgumentException}。
+   * <p>
+   * {@link KVCache#remove(Object)} 与 {@link KVCache#computeIfAbsent(Object, Function)}
+   * 一度<b>没有</b>在入口校验，靠下游的 {@link KVCache#get(Object)} 兜住（{@code get(null)} 抛 IAE）。
+   * 那让"同一个非法 key 换一个方法就换一种异常"：{@code computeIfAbsent(null, null)} 在走默认
+   * 实现的那些类上抛的是 {@link NullPointerException}（{@code requireNonNull} 排在前面），
+   * 在覆盖成底层原子版本的 CHM 系上抛的是 IAE。现在两个默认方法都在开头调
+   * {@code assertKeyNotNull}，与"key 为 null 是本接口对所有方法一致约定的调用方错误"对齐 ——
+   * 所以下面连"两个参数都是 null"这一格也一并断言。
+   */
+  @Test
+  public void testNullKeyRejectedOnDefaultRemoveAndComputeIfAbsent() {
+    for (KVCache<String, String> cache : caches) {
+      String name = cache.getClass().getSimpleName();
+
+      CacheAssertions.assertRejected(name + ": remove", () -> cache.remove(null));
+      CacheAssertions.assertRejected(name + ": computeIfAbsent（mappingFunction 非 null）",
+              () -> cache.computeIfAbsent(null, k -> "v"));
+      CacheAssertions.assertRejected(name + ": computeIfAbsent(null, null) 报 key 的问题，不是 NPE",
+              () -> cache.computeIfAbsent(null, null));
+    }
+  }
+
+  /**
+   * <b>不限制条数的实现，{@code capacity()} 哨兵必须统一。</b>
+   * <p>
+   * 这些实现都不限制条数，"容量上限"只能用一个哨兵表示。此前四个 HashMap /
+   * ConcurrentHashMap 系的实现返回 {@code 1 << 30}，而 {@link TreeMapKVCache} 返回
+   * {@link KVCache#UNLIMITED_CAPACITY} —— 调用方写 {@code size() <= capacity()} 或
+   * {@code capacity() - size()} 时，两类实现的边界不一样。
+   * <p>
+   * 统一到 {@link KVCache#UNLIMITED_CAPACITY}：它更接近"没有上限"这个语义
+   * （{@code 1 << 30} 在超过 10 亿条时会真的"撞顶"）。哨兵是"答不上来"时给调用方的
+   * 一个稳定口径，<b>不是</b>真实的容量约束 —— 这些实现根本没有淘汰机制。
+   * <p>
+   * 断言写的是那个常量本身，不是 {@code Integer.MAX_VALUE} 这个字面量：
+   * 上限的数值将来可能变，这条用例钉的是"所有不限制条数的实现都用同一个口径"。
+   * <p>
+   * 只跑 {@link #unboundedCaches}：带真实容量的淘汰实现不在此列，见那个字段的说明。
+   */
+  @Test
+  public void testMemoryImplCapacitySentinelIsUniform() {
+    for (KVCache<String, String> cache : unboundedCaches) {
+      String name = cache.getClass().getSimpleName();
+      Assert.assertEquals(name + ": 不限制条数的实现，capacity() 哨兵应统一为 KVCache.UNLIMITED_CAPACITY",
+              KVCache.UNLIMITED_CAPACITY, cache.capacity());
+    }
+  }
+
+  /**
+   * computeIfAbsent 命中缓存时不调 mappingFunction
    */
   @Test
   public void testComputeIfAbsentIsLazy() {
-    for (ExpiredKVCache<String, String> cache : caches) {
+    for (KVCache<String, String> cache : caches) {
       String name = cache.getClass().getSimpleName();
       String key = uniqueKey(name);
       AtomicInteger invoked = new AtomicInteger();
 
       Assert.assertEquals(name + ": 第一次应该计算",
-              "v1", cache.computeIfAbsent(key, k -> "v" + invoked.incrementAndGet(), 1, TimeUnit.MINUTES));
-      Assert.assertEquals(name + ": 第二次应该命中缓存，不再计算",
-              "v1", cache.computeIfAbsent(key, k -> "v" + invoked.incrementAndGet(), 1, TimeUnit.MINUTES));
-      Assert.assertEquals(name + ": mappingFunction 只应该被调用一次", 1, invoked.get());
-
-      // 不带 ttl 的重载同样命中
-      Assert.assertEquals(name + ": 不带 ttl 的重载命中同一个 key",
               "v1", cache.computeIfAbsent(key, k -> "v" + invoked.incrementAndGet()));
-      Assert.assertEquals(name + ": mappingFunction 仍然只被调用一次", 1, invoked.get());
-
-      cache.delete(key);
+      Assert.assertEquals(name + ": 第二次应该命中缓存",
+              "v1", cache.computeIfAbsent(key, k -> "v" + invoked.incrementAndGet()));
+      Assert.assertEquals(name + ": mappingFunction 只应该被调用一次", 1, invoked.get());
     }
   }
 
   /**
-   * computeIfAbsent 的计算结果为 null 时不应该写入 —— 否则又变成"存了个 null"，
-   * containsKey 返回 true 而 get 返回 null，和 KVCache#set 的契约打架。
+   * computeIfAbsent 的计算结果为 null 时不写入
    */
   @Test
   public void testComputeIfAbsentDoesNotStoreNull() {
-    for (ExpiredKVCache<String, String> cache : caches) {
+    for (KVCache<String, String> cache : caches) {
       String name = cache.getClass().getSimpleName();
       String key = uniqueKey(name);
 
-      Assert.assertNull(name + ": 应该返回 null",
-              cache.computeIfAbsent(key, k -> null, 1, TimeUnit.MINUTES));
+      Assert.assertNull(name + ": 应该返回 null", cache.computeIfAbsent(key, k -> null));
       Assert.assertFalse(name + ": 结果为 null 时不应该写入", cache.containsKey(key));
-
-      Assert.assertNull(name + ": 2 参重载同样",
-              cache.computeIfAbsent(key, k -> null));
-      Assert.assertFalse(name + ": 2 参重载同样不写入", cache.containsKey(key));
-
-      cache.delete(key);
     }
   }
 
   /**
-   * 线程安全：底层存储线程安全的实现，KVCache 也必须线程安全。
-   * <p/>
-   * 每个线程用自己的 key 反复"写 → 原样读回来 → 查存在 → 删"，同时在一个共享 key 上
-   * 做并发的写/删/条件写。要求：不抛异常、本线程写的值必须原样读回来。
-   * <p/>
-   * 这个用例能抓到的是客户端侧的状态问题（共享可变字段、非线程安全的代理等），
-   * 抓不到 redis 服务端的问题（那是 redis 自己的事）。
+   * remove = get & delete
+   */
+  @Test
+  public void testRemove() {
+    for (KVCache<String, String> cache : caches) {
+      String name = cache.getClass().getSimpleName();
+      String key = uniqueKey(name);
+
+      cache.set(key, "v");
+      Assert.assertEquals(name + ": remove 应该返回被删掉的值", "v", cache.remove(key));
+      Assert.assertNull(name + ": 删掉之后应该读不到", cache.get(key));
+      Assert.assertFalse(name + ": key 应该不存在了", cache.containsKey(key));
+    }
+  }
+
+  /**
+   * <b>接口默认的 {@code remove} 不是原子的</b>：它是 get 与 delete 两步，
+   * 两步之间别人写进来的值会被这次删除带走，而方法返回的还是它先前读到的那个旧值。
+   * <p>
+   * 这是 {@link KVCache} 的 L2 层"接口默认实现不属于本层"的实证，也说明了为什么想达到 L2
+   * 的实现必须覆盖 {@code remove}（如 {@link ConcurrentHashMapKVCache} 直接委托
+   * ConcurrentHashMap 的原子 remove）。
+   * <p>
+   * 用可控的底层存储把窗口<b>钉死</b>，不靠并发碰运气：{@code remove} 读到 "old" 之后停住
+   * → 主线程写入 "new" → 放行 → {@code remove} 删掉的其实是 "new"，返回的却是 "old"。
+   * 换成原子的 remove，删除与返回是同一个瞬间，返回值必然是 "new"。
+   */
+  @Test
+  public void testDefaultRemoveIsNotAtomic() throws Exception {
+    PausableGetKVCache<String, String> cache = new PausableGetKVCache<>();
+    cache.set("k", "old");
+
+    AtomicReference<String> removed = new AtomicReference<>();
+    Thread thread = new Thread(() -> removed.set(cache.remove("k")));
+    thread.setDaemon(true);
+    thread.start();
+
+    Assert.assertTrue("等 remove 读完旧值", cache.readDone.await(30, TimeUnit.SECONDS));
+
+    // remove 已经读到 "old" 但还没删，此时别人把值换了
+    cache.set("k", "new");
+
+    cache.resume.countDown();
+    thread.join(TimeUnit.SECONDS.toMillis(30));
+
+    Assert.assertEquals("删掉的是并发写入的 new，默认实现却把先前读到的旧值返回了",
+            "old", removed.get());
+    Assert.assertNull("并发写入的 new 被这次 remove 带走了", cache.get("k"));
+  }
+
+  /**
+   * <b>{@link SynchronizedKVCache} 把复合操作的原子性补上了</b>（L2 的复合操作那一半）：
+   * 整个 check-then-act 被锁住，
+   * 所以 {@code computeIfAbsent} 变成原子的，并发下 {@code mappingFunction} 只调一次。
+   * <p>
+   * 对照 {@link ExpiredKVCacheContractTest#testComputeIfAbsentIsNotAtomicUnderConcurrency()}：
+   * 同样是 8 线程并发，那边断言裸实现的 {@code mappingFunction} 被调用<b>多次</b>（只保证 &gt; 1），
+   * 这边断言包一层之后只调 1 次。
+   * <p>
+   * 顺带验证并发下不抛异常、不死循环/死锁。
+   */
+  @Test
+  public void testComputeIfAbsentBecomesAtomicAfterSynchronize() throws Exception {
+    int threadCount = 8;
+
+    int invoked = concurrentComputeIfAbsent(
+            SynchronizedKVCache.synchronize(new TreeMapKVCache<>()), threadCount);
+
+    log.error("SynchronizedKVCache: {} 个线程并发 computeIfAbsent，mappingFunction 被调用了 {} 次",
+            threadCount, invoked);
+
+    Assert.assertEquals("SynchronizedKVCache 锁住了整个 check-then-act，mappingFunction 只应该被调用一次",
+            1, invoked);
+  }
+
+  /**
+   * 包装后的实例线程安全：并发读写不抛异常、写的值原样读回来。
    */
   @Test
   public void testThreadSafety() throws Exception {
     int threadCount = 4;
-    int rounds = 20;
+    int rounds = 200;
 
-    for (ExpiredKVCache<String, String> cache : threadSafeCaches) {
+    for (KVCache<String, String> cache : threadSafeCaches) {
       String name = cache.getClass().getSimpleName();
-      String sharedKey = uniqueKey(name) + ":shared";
-
       CountDownLatch start = new CountDownLatch(1);
       CountDownLatch done = new CountDownLatch(threadCount);
       List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
-      AtomicInteger completedRounds = new AtomicInteger();
-      AtomicInteger skippedRounds = new AtomicInteger();
 
       for (int t = 0; t < threadCount; t++) {
         final int threadId = t;
         Thread thread = new Thread(() -> {
-          String ownKey = sharedKey + ":t" + threadId;
+          String ownKey = uniqueKey(name) + ":t" + threadId;
           String ownValue = "v" + threadId;
           try {
             start.await();
             for (int i = 0; i < rounds; i++) {
-              try {
-                cache.set(ownKey, ownValue, 1, TimeUnit.MINUTES);
-
-                // 本线程写的值必须原样读回来 —— 读回来别人的值说明客户端串号了
-                String read = cache.get(ownKey);
-                if (!ownValue.equals(read)) {
-                  throw new AssertionError(name + ": 本线程写的值应该原样读回来. 期望[" + ownValue
-                          + "] 实际[" + read + "] key=" + ownKey);
-                }
-
-                // 共享 key 上并发写删，只要求不抛异常
-                cache.set(sharedKey, ownValue, 1, TimeUnit.MINUTES);
-                cache.get(sharedKey);
-                cache.containsKey(sharedKey);
-                cache.delete(sharedKey);
-
-                // 到这里 ownKey 必须还在（1 分钟 ttl，一轮才几十毫秒）
-                if (!cache.containsKey(ownKey)) {
-                  throw new AssertionError(name + ": ownKey 在连续操作之间消失了，key=" + ownKey
-                          + " 再次 get=" + cache.get(ownKey));
-                }
-                completedRounds.incrementAndGet();
-              } catch (Throwable e) {
-                // 公网那台 redis 时不时 5s 命令超时 / 连不上，那是环境问题，
-                // 不是这个用例要测的"客户端侧线程安全"，跳过这一轮
-                if (isTransientServerError(e)) {
-                  skippedRounds.incrementAndGet();
-                } else {
-                  throw e;
-                }
-              }
+              cache.set(ownKey, ownValue);
+              Assert.assertEquals(name + ": 本线程写的值应该原样读回来", ownValue, cache.get(ownKey));
+              cache.setnx(ownKey, "should-not-win");
+              Assert.assertEquals(name + ": setnx 不该覆盖已有值", ownValue, cache.get(ownKey));
             }
           } catch (Throwable e) {
             failures.add(new IllegalStateException(name + ": 线程 " + threadId + " 失败", e));
           } finally {
-            try {
-              cache.delete(ownKey);
-            } catch (Throwable ignored) {
-              // 收尾失败无所谓
-            }
             done.countDown();
           }
         });
@@ -267,80 +403,35 @@ public class KVCacheContractTest {
       }
 
       start.countDown();
-      Assert.assertTrue(name + ": 并发执行超时", done.await(120, TimeUnit.SECONDS));
+      Assert.assertTrue(name + ": 不应该死循环或死锁", done.await(30, TimeUnit.SECONDS));
 
       for (Throwable failure : failures) {
         log.error("{}", name, failure);
       }
-      Assert.assertTrue(name + ": 并发执行不应该有任何异常", failures.isEmpty());
-      if (skippedRounds.get() > 0) {
-        log.error("{}: 有 {} 轮因为 redis 抖动被跳过", name, skippedRounds.get());
-      }
-      Assert.assertTrue(name + ": 大多数轮次应该跑完，否则这个用例等于没测",
-              completedRounds.get() >= threadCount * rounds / 2);
-
-      cache.delete(sharedKey);
+      Assert.assertTrue(name + ": 并发下不应该抛异常", failures.isEmpty());
     }
   }
 
   /**
-   * {@code ExpiredHashMapKVCache} <b>不保证线程安全</b> —— 底层是普通 HashMap。
-   * <p/>
-   * 并发写下不只是丢数据，还会因为桶结构损坏而<b>卡死</b>。实测 8 线程 × 3000 次写：
-   * 10 轮里 9 轮丢数据（丢 5%~67%）、1 轮直接卡死 —— 正常轮次只要 5~22ms，
-   * 所以卡死不是"太慢"，是真的卡住了。
-   * <p/>
-   * 断言写成 {@code lost != 0}：丢数据（{@code lost > 0}）和卡死（{@code lost == -1}）
-   * 都算证明了它不线程安全。反过来，如果哪天它变成 0，说明实现被换成了线程安全的，
-   * 这个用例就该删掉。
+   * @return mappingFunction 被调用的次数
    */
-  @Test
-  public void testThreadUnSafe() throws Exception {
-    long lost = concurrentWrite(new ExpiredHashMapKVCache<String, String>() {
-    }, 8, 3000);
-
-    log.error("[ExpiredHashMapKVCache] 并发写 24000 个 key：{}",
-            lost == -1 ? "卡死（10s 没跑完）" : ("丢了 " + lost + " 个"));
-
-    Assert.assertTrue(
-            "并发写 24000 个 key 应该丢数据或卡死；如果这里真的 0 丢失，说明它已经变成线程安全的了",
-            lost != 0);
-  }
-
-  /**
-   * 对照组：包一层 {@link SynchronizedExpiredKVCache} 之后必须一条不丢。
-   * <p/>
-   * 这就是 {@link cn.addenda.component.cache.KVCache} 上写的"底层不线程安全时怎么办"的答案。
-   */
-  @Test
-  public void testSynchronizedWrapperIsThreadSafe() throws Exception {
-    long lost = concurrentWrite(
-            SynchronizedExpiredKVCache.<String, String>synchronize(new ExpiredHashMapKVCache<String, String>() {
-            }), 8, 3000);
-
-    Assert.assertEquals("SynchronizedExpiredKVCache 包装之后不应该丢任何数据", 0, lost);
-  }
-
-  /**
-   * n 个线程并发往同一个 cache 里写各自独占的 key，然后校验每个 key 都还在。
-   *
-   * @return 丢失的 key 数量；<b>-1 表示超时</b>（多半是底层结构被并发写坏、线程卡死了）
-   */
-  @SneakyThrows
-  private long concurrentWrite(ExpiredKVCache<String, String> cache, int threads, int perThread) {
+  private int concurrentComputeIfAbsent(KVCache<String, String> cache, int threadCount) throws Exception {
+    AtomicInteger invoked = new AtomicInteger();
     CountDownLatch start = new CountDownLatch(1);
-    CountDownLatch done = new CountDownLatch(threads);
+    CountDownLatch done = new CountDownLatch(threadCount);
 
-    for (int t = 0; t < threads; t++) {
-      final int threadId = t;
+    for (int t = 0; t < threadCount; t++) {
       Thread thread = new Thread(() -> {
         try {
           start.await();
-          for (int i = 0; i < perThread; i++) {
-            cache.set("race:" + threadId + ":" + i, "v");
-          }
+          cache.computeIfAbsent("race-key", k -> {
+            invoked.incrementAndGet();
+            // 把 check 和 act 之间的窗口拉大，让并发暴露出来
+            SleepUtils.sleep(TimeUnit.MILLISECONDS, 100);
+            return "computed";
+          });
         } catch (Throwable ignored) {
-          // 丢数据 / 卡死才是这次要看的结果
+          // 次数才是这次要看的结果
         } finally {
           done.countDown();
         }
@@ -350,131 +441,78 @@ public class KVCacheContractTest {
     }
 
     start.countDown();
-    if (!done.await(10, TimeUnit.SECONDS)) {
-      return -1;
-    }
-
-    long lost = 0;
-    for (int t = 0; t < threads; t++) {
-      for (int i = 0; i < perThread; i++) {
-        if (!cache.containsKey("race:" + t + ":" + i)) {
-          lost++;
-        }
-      }
-    }
-    return lost;
-  }
-
-  /**
-   * {@code computeIfAbsent} 在并发下<b>不是原子的</b> —— 这是接口契约层面的，不是实现缺陷。
-   * <p/>
-   * {@code KVCache} 的默认实现是 check-then-act：
-   * <pre>
-   * if ((v = get(key)) == null) {        // ← 检查
-   *     if ((newValue = mappingFunction.apply(key)) != null) {
-   *         set(key, newValue);          // ← 执行
-   *     }
-   * }
-   * </pre>
-   * 多个线程可以同时通过"检查"这一步，于是 {@code mappingFunction} 被调用多次，
-   * 最后一次写入胜出。单线程下只调一次（见 {@code testComputeIfAbsentIsLazy}），并发下不成立。
-   * <p/>
-   * 需要原子性的话由上层加锁 —— {@code CacheHelper} 就是这么做的
-   * （{@code lockAllocator} + 令牌桶限流，见 {@code LettuceRedisCacheHelperTest.testConcurrentQueryHitsCache}）。
-   * <p/>
-   * 同时验证：并发下<b>不抛异常、不死循环/死锁</b>（用带超时的 await 兜住）。
-   */
-  @Test
-  public void testComputeIfAbsentIsNotAtomicUnderConcurrency() throws Exception {
-    int threadCount = 8;
-
-    for (ExpiredKVCache<String, String> cache : threadSafeCaches) {
-      String name = cache.getClass().getSimpleName();
-      String key = uniqueKey(name);
-
-      AtomicInteger invoked = new AtomicInteger();
-      CountDownLatch start = new CountDownLatch(1);
-      CountDownLatch done = new CountDownLatch(threadCount);
-      List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
-
-      for (int t = 0; t < threadCount; t++) {
-        Thread thread = new Thread(() -> {
-          try {
-            start.await();
-            cache.computeIfAbsent(key, k -> {
-              invoked.incrementAndGet();
-              // 把 check 和 act 之间的窗口拉大，让并发暴露出来
-              SleepUtils.sleep(TimeUnit.MILLISECONDS, 100);
-              return "computed";
-            }, 1, TimeUnit.MINUTES);
-          } catch (Throwable e) {
-            failures.add(new IllegalStateException(name + ": 并发 computeIfAbsent 抛异常", e));
-          } finally {
-            done.countDown();
-          }
-        });
-        thread.setDaemon(true);
-        thread.start();
-      }
-
-      start.countDown();
-      // 带超时的 await：真的死循环/死锁的话这里会失败，而不是把测试挂住
-      Assert.assertTrue(name + ": 不应该死循环或死锁", done.await(30, TimeUnit.SECONDS));
-
-      log.error("{}: {} 个线程并发 computeIfAbsent，mappingFunction 被调用了 {} 次",
-              name, threadCount, invoked.get());
-
-      for (Throwable failure : failures) {
-        log.error("{}", name, failure);
-      }
-      Assert.assertTrue(name + ": 并发下不应该抛异常", failures.isEmpty());
-      Assert.assertTrue(name + ": 并发下 mappingFunction 应该被调用多次，说明 computeIfAbsent 不是原子的",
-              invoked.get() > 1);
-
-      cache.delete(key);
-    }
-  }
-
-  /**
-   * 判断是不是"服务器/网络抖动"这类环境问题，而不是客户端线程安全问题。
-   * <p/>
-   * 不按具体异常类型判（lettuce / redisson / spring 各不相同），按文案判，
-   * 这样五个实现共用一份逻辑。
-   */
-  private boolean isTransientServerError(Throwable t) {
-    for (Throwable c = t; c != null && c != c.getCause(); c = c.getCause()) {
-      if (c instanceof AssertionError) {
-        return false;
-      }
-      String message = c.getMessage();
-      if (message == null) {
-        continue;
-      }
-      if (message.contains("timed out") || message.contains("Unable to connect")
-              || message.contains("Connection refused")) {
-        return true;
-      }
-    }
-    return false;
+    Assert.assertTrue("不应该死循环或死锁", done.await(30, TimeUnit.SECONDS));
+    return invoked.get();
   }
 
   private String uniqueKey(String implName) {
     return "KVCacheContractTest:" + implName + ":" + UUID.randomUUID().toString().replace("-", "");
   }
 
-  @SneakyThrows
-  private LettuceConnectionFactory newConnectionFactory() {
-    Properties properties = new Properties();
-    try (InputStream in = new FileInputStream(KVCacheContractTest.class.getClassLoader()
-            .getResource("redis_standalone.properties").getPath())) {
-      properties.load(in);
+  /**
+   * 一个可控的底层存储：{@link #get(Object)} 读到值之后会停下来，等测试放行才返回。
+   * <p>
+   * 目的是把 {@link KVCache#remove(Object)} 默认实现里 get 与 delete 之间的窗口
+   * 确定性地暴露出来。
+   * <p>
+   * <b>刻意不覆盖 {@code remove} / {@code computeIfAbsent}</b> —— 要测的就是接口的默认实现。
+   */
+  private static class PausableGetKVCache<K, V> implements KVCache<K, V> {
+
+    private final KVCache<K, V> delegate = new HashMapKVCache<>();
+
+    /**
+     * get 已经读到值
+     */
+    private final CountDownLatch readDone = new CountDownLatch(1);
+
+    /**
+     * 放行 get 返回
+     */
+    private final CountDownLatch resume = new CountDownLatch(1);
+
+    @Override
+    public void set(K k, V v) {
+      delegate.set(k, v);
     }
 
-    LettuceConnectionFactory factory = new LettuceConnectionFactory(
-            properties.getProperty("host"), Integer.parseInt(properties.getProperty("port")));
-    factory.setPassword(properties.getProperty("password"));
-    factory.afterPropertiesSet();
-    return factory;
+    @Override
+    public boolean setnx(K k, V v) {
+      return delegate.setnx(k, v);
+    }
+
+    @Override
+    public boolean containsKey(K k) {
+      return delegate.containsKey(k);
+    }
+
+    @Override
+    public V get(K k) {
+      V v = delegate.get(k);
+      readDone.countDown();
+      try {
+        resume.await(30, TimeUnit.SECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      return v;
+    }
+
+    @Override
+    public boolean delete(K k) {
+      return delegate.delete(k);
+    }
+
+    @Override
+    public int size() {
+      return delegate.size();
+    }
+
+    @Override
+    public int capacity() {
+      return delegate.capacity();
+    }
+
   }
 
 }

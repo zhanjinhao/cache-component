@@ -1,5 +1,6 @@
 package cn.addenda.component.cache.test;
 
+import cn.addenda.component.base.util.SleepUtils;
 import lombok.ToString;
 import org.junit.Assert;
 
@@ -50,7 +51,7 @@ public class TestDelayQueue {
     delayQueue.put(new DelayedElement(500, "Element2"));
 
     // 等待一段时间让元素到期（仅演示，实际应用中可能不需要这一步）
-    Thread.sleep(600);
+    SleepUtils.sleep(TimeUnit.MILLISECONDS, 600);
 
     // 使用toArray将队列转换为DelayedElement[]数组
     DelayedElement[] elementsArray = delayQueue.toArray(new DelayedElement[]{});

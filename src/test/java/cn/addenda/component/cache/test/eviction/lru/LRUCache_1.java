@@ -1,8 +1,7 @@
 package cn.addenda.component.cache.test.eviction.lru;
 
-import cn.addenda.component.cache.ExpiredHashMapKVCache;
 import cn.addenda.component.cache.KVCache;
-import cn.addenda.component.cache.eviction.lru.LruKVCache;
+import cn.addenda.component.cache.eviction.lru.LruHashMapKVCache;
 
 /**
  * 通过leetCode测试
@@ -15,7 +14,7 @@ public class LRUCache_1 {
 
   public LRUCache_1(int capacity) {
     this.capacity = capacity;
-    kvCache = new LruKVCache<>(capacity, new ExpiredHashMapKVCache<>());
+    kvCache = new LruHashMapKVCache<>(capacity);
   }
 
   public int get(int key) {

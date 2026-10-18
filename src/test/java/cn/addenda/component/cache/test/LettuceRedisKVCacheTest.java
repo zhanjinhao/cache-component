@@ -1,8 +1,7 @@
-package cn.addenda.component.cache.test.helper;
+package cn.addenda.component.cache.test;
 
 import cn.addenda.component.base.util.SleepUtils;
-import cn.addenda.component.cache.helper.LettuceRedisKVCache;
-import cn.addenda.component.cache.test.RedisClientBaseTest;
+import cn.addenda.component.cache.LettuceRedisKVCache;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import lombok.SneakyThrows;
@@ -13,7 +12,6 @@ import org.junit.Test;
 
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * @author addenda
@@ -74,21 +72,23 @@ public class LettuceRedisKVCacheTest {
   @Test
   public void testSetWithTimeoutExpires() {
     String key = uniqueKey();
-    kvCache.set(key, "v", 200, TimeUnit.MILLISECONDS);
+    kvCache.set(key, "v", 1, TimeUnit.SECONDS);
     Assert.assertEquals("v", kvCache.get(key));
 
-    SleepUtils.sleep(TimeUnit.MILLISECONDS, 500);
+    SleepUtils.sleep(TimeUnit.MILLISECONDS, 1200);
     Assert.assertNull(kvCache.get(key));
     Assert.assertFalse(kvCache.containsKey(key));
   }
 
   /**
-   * setex只支持秒级ttl，实现里使用的是psetex。这里验证亚秒级的ttl是精确生效的。
+   * lettuce 的 {@code setex} 只支持整秒，实现里用的是 {@code psetex}。
+   * 这里用 <b>1500ms</b>（非整秒）验证 ttl 的毫秒精度：若被按秒处理，
+   * 它会变成 1 秒或 2 秒，下面两个时间点的断言就会对不上。
    */
   @Test
-  public void testSetWithSubSecondTimeout() {
+  public void testSetWithMillisecondPrecisionTimeout() {
     String key = uniqueKey();
-    kvCache.set(key, "v", 2000, TimeUnit.MILLISECONDS);
+    kvCache.set(key, "v", 1500, TimeUnit.MILLISECONDS);
 
     SleepUtils.sleep(TimeUnit.MILLISECONDS, 700);
     Assert.assertEquals("v", kvCache.get(key));
@@ -139,7 +139,7 @@ public class LettuceRedisKVCacheTest {
 
   /**
    * set(k, null) 等价于删除 —— redis 里没有 java null 值。
-   * <p/>
+   * <p>
    * 不对齐的话 lettuce 会把 null 编码成<b>空串</b>，get 返回 ""，
    * 等于把业务写进去的 null 静默换成了另一个值。Redisson 和内存实现都不会这样。
    */
@@ -177,22 +177,27 @@ public class LettuceRedisKVCacheTest {
     Assert.assertNull(kvCache.get(key));
   }
 
-  @Test
-  public void testComputeIfAbsent() {
-    String key = uniqueKey();
-    AtomicInteger counter = new AtomicInteger();
-
-    String first = kvCache.computeIfAbsent(key, k -> "v" + counter.incrementAndGet(), 1, TimeUnit.MINUTES);
-    String second = kvCache.computeIfAbsent(key, k -> "v" + counter.incrementAndGet(), 1, TimeUnit.MINUTES);
-
-    Assert.assertEquals("v1", first);
-    Assert.assertEquals("v1", second);
-    Assert.assertEquals(1, counter.get());
+  /**
+   * computeIfAbsent 明确不支持：它是原子的 check-then-act，redis 表达不了 ——
+   * get 与 set 两次往返之间必然有窗口，mappingFunction 又是本地代码、服务端不参与求值。
+   * <p>
+   * 与 {@link #testSize()} 一样，宁可抛 {@link UnsupportedOperationException}，
+   * 也不给一个并发下会重复计算、互相覆盖的版本。两个重载的行为一致，
+   * 完整覆盖见 {@code ExpiredKVCacheContractTest#testComputeIfAbsentNotSupported}。
+   */
+  @Test(expected = UnsupportedOperationException.class)
+  public void testComputeIfAbsentUnsupported() {
+    kvCache.computeIfAbsent(uniqueKey(), k -> "v", 1, TimeUnit.MINUTES);
   }
 
-  @Test
-  public void testCapacity() {
-    Assert.assertEquals(Long.MAX_VALUE, kvCache.capacity());
+  /**
+   * capacity() 与 {@link #testSize()} 同口径：redis 答不上来（容量由服务端的
+   * {@code maxmemory-policy} 全局决定），就抛异常，而不是返回一个编造的
+   * {@code Long.MAX_VALUE} 让 {@code size() <= capacity()} 看起来成立。
+   */
+  @Test(expected = UnsupportedOperationException.class)
+  public void testCapacityUnsupported() {
+    kvCache.capacity();
   }
 
   @Test(expected = UnsupportedOperationException.class)

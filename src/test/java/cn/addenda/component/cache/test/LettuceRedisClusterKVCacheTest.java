@@ -1,8 +1,7 @@
-package cn.addenda.component.cache.test.helper;
+package cn.addenda.component.cache.test;
 
 import cn.addenda.component.base.util.SleepUtils;
-import cn.addenda.component.cache.helper.LettuceRedisClusterKVCache;
-import cn.addenda.component.cache.test.RedisClusterClientBaseTest;
+import cn.addenda.component.cache.LettuceRedisClusterKVCache;
 import io.lettuce.core.cluster.RedisClusterClient;
 import io.lettuce.core.cluster.api.StatefulRedisClusterConnection;
 import lombok.SneakyThrows;
@@ -13,7 +12,6 @@ import org.junit.Test;
 
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * {@link LettuceRedisKVCacheTest} 的集群版，逐条对齐以证明行为一致。
@@ -76,21 +74,23 @@ public class LettuceRedisClusterKVCacheTest {
   @Test
   public void testSetWithTimeoutExpires() {
     String key = uniqueKey();
-    kvCache.set(key, "v", 200, TimeUnit.MILLISECONDS);
+    kvCache.set(key, "v", 1, TimeUnit.SECONDS);
     Assert.assertEquals("v", kvCache.get(key));
 
-    SleepUtils.sleep(TimeUnit.MILLISECONDS, 500);
+    SleepUtils.sleep(TimeUnit.MILLISECONDS, 1200);
     Assert.assertNull(kvCache.get(key));
     Assert.assertFalse(kvCache.containsKey(key));
   }
 
   /**
-   * setex只支持秒级ttl，实现里使用的是psetex。这里验证亚秒级的ttl是精确生效的。
+   * lettuce 的 {@code setex} 只支持整秒，实现里用的是 {@code psetex}。
+   * 这里用 <b>1500ms</b>（非整秒）验证 ttl 的毫秒精度：若被按秒处理，
+   * 它会变成 1 秒或 2 秒，下面两个时间点的断言就会对不上。
    */
   @Test
-  public void testSetWithSubSecondTimeout() {
+  public void testSetWithMillisecondPrecisionTimeout() {
     String key = uniqueKey();
-    kvCache.set(key, "v", 2000, TimeUnit.MILLISECONDS);
+    kvCache.set(key, "v", 1500, TimeUnit.MILLISECONDS);
 
     SleepUtils.sleep(TimeUnit.MILLISECONDS, 700);
     Assert.assertEquals("v", kvCache.get(key));
@@ -176,22 +176,21 @@ public class LettuceRedisClusterKVCacheTest {
     Assert.assertNull(kvCache.get(key));
   }
 
-  @Test
-  public void testComputeIfAbsent() {
-    String key = uniqueKey();
-    AtomicInteger counter = new AtomicInteger();
-
-    String first = kvCache.computeIfAbsent(key, k -> "v" + counter.incrementAndGet(), 1, TimeUnit.MINUTES);
-    String second = kvCache.computeIfAbsent(key, k -> "v" + counter.incrementAndGet(), 1, TimeUnit.MINUTES);
-
-    Assert.assertEquals("v1", first);
-    Assert.assertEquals("v1", second);
-    Assert.assertEquals(1, counter.get());
+  /**
+   * computeIfAbsent 明确不支持，理由见 {@link LettuceRedisKVCacheTest#testComputeIfAbsentUnsupported()}。
+   */
+  @Test(expected = UnsupportedOperationException.class)
+  public void testComputeIfAbsentUnsupported() {
+    kvCache.computeIfAbsent(uniqueKey(), k -> "v", 1, TimeUnit.MINUTES);
   }
 
-  @Test
-  public void testCapacity() {
-    Assert.assertEquals(Long.MAX_VALUE, kvCache.capacity());
+  /**
+   * capacity() 与 size() 同口径，理由见
+   * {@link LettuceRedisKVCacheTest#testCapacityUnsupported()}。
+   */
+  @Test(expected = UnsupportedOperationException.class)
+  public void testCapacityUnsupported() {
+    kvCache.capacity();
   }
 
   @Test(expected = UnsupportedOperationException.class)
