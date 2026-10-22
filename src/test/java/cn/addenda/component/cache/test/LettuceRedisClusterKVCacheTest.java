@@ -1,6 +1,7 @@
 package cn.addenda.component.cache.test;
 
 import cn.addenda.component.base.util.SleepUtils;
+import cn.addenda.component.cache.CacheUnsupportedOperationException;
 import cn.addenda.component.cache.LettuceRedisClusterKVCache;
 import io.lettuce.core.cluster.RedisClusterClient;
 import io.lettuce.core.cluster.api.StatefulRedisClusterConnection;
@@ -179,7 +180,7 @@ public class LettuceRedisClusterKVCacheTest {
   /**
    * computeIfAbsent 明确不支持，理由见 {@link LettuceRedisKVCacheTest#testComputeIfAbsentUnsupported()}。
    */
-  @Test(expected = UnsupportedOperationException.class)
+  @Test(expected = CacheUnsupportedOperationException.class)
   public void testComputeIfAbsentUnsupported() {
     kvCache.computeIfAbsent(uniqueKey(), k -> "v", 1, TimeUnit.MINUTES);
   }
@@ -188,12 +189,12 @@ public class LettuceRedisClusterKVCacheTest {
    * capacity() 与 size() 同口径，理由见
    * {@link LettuceRedisKVCacheTest#testCapacityUnsupported()}。
    */
-  @Test(expected = UnsupportedOperationException.class)
+  @Test(expected = CacheUnsupportedOperationException.class)
   public void testCapacityUnsupported() {
     kvCache.capacity();
   }
 
-  @Test(expected = UnsupportedOperationException.class)
+  @Test(expected = CacheUnsupportedOperationException.class)
   public void testSize() {
     kvCache.size();
   }

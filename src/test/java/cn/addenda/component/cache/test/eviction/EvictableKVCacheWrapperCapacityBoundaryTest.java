@@ -251,7 +251,8 @@ public class EvictableKVCacheWrapperCapacityBoundaryTest {
   /**
    * 反复 setnx 同一个 key 同样不该撑大 —— 只有第一次会写进去。
    * <p>
-   * {@link LruKKVCache} 不在这组里：它明确不支持 {@code setnx}（抛 UOE），
+   * {@link LruKKVCache} 不在这组里：它明确不支持 {@code setnx}
+   * （抛 {@code CacheUnsupportedOperationException}），
    * 见 {@link #testSetnxIsUnsupportedOnLruKKVCache()}。
    */
   @Test
@@ -335,7 +336,7 @@ public class EvictableKVCacheWrapperCapacityBoundaryTest {
 
   /**
    * 去掉 {@link LruKKVCache} —— 它明确不支持 {@code setnx}，行为是抛
-   * {@link UnsupportedOperationException}，不能混在"setnx 通用契约"里跑。
+   * {@code CacheUnsupportedOperationException}，不能混在"setnx 通用契约"里跑。
    * <p>
    * 这跟"容量"无关，是语义对不上：LRU-K 的写入要过准入闸门，
    * 而 {@code setnx} 承诺"不存在就写、写了就有"。
@@ -348,7 +349,7 @@ public class EvictableKVCacheWrapperCapacityBoundaryTest {
 
   /**
    * 单独钉住 {@link LruKKVCache} 的这条：{@code setnx} 抛
-   * {@link UnsupportedOperationException}，而不是返回一个需要猜的 false。
+   * {@code CacheUnsupportedOperationException}，而不是返回一个需要猜的 false。
    */
   @Test
   public void testSetnxIsUnsupportedOnLruKKVCache() {

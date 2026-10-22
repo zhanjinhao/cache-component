@@ -1,6 +1,7 @@
 package cn.addenda.component.cache.test;
 
 import cn.addenda.component.base.util.SleepUtils;
+import cn.addenda.component.cache.CacheUnsupportedOperationException;
 import cn.addenda.component.cache.LettuceRedisKVCache;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
@@ -181,11 +182,11 @@ public class LettuceRedisKVCacheTest {
    * computeIfAbsent 明确不支持：它是原子的 check-then-act，redis 表达不了 ——
    * get 与 set 两次往返之间必然有窗口，mappingFunction 又是本地代码、服务端不参与求值。
    * <p>
-   * 与 {@link #testSize()} 一样，宁可抛 {@link UnsupportedOperationException}，
+   * 与 {@link #testSize()} 一样，宁可抛 {@link CacheUnsupportedOperationException}，
    * 也不给一个并发下会重复计算、互相覆盖的版本。两个重载的行为一致，
    * 完整覆盖见 {@code ExpiredKVCacheContractTest#testComputeIfAbsentNotSupported}。
    */
-  @Test(expected = UnsupportedOperationException.class)
+  @Test(expected = CacheUnsupportedOperationException.class)
   public void testComputeIfAbsentUnsupported() {
     kvCache.computeIfAbsent(uniqueKey(), k -> "v", 1, TimeUnit.MINUTES);
   }
@@ -195,12 +196,12 @@ public class LettuceRedisKVCacheTest {
    * {@code maxmemory-policy} 全局决定），就抛异常，而不是返回一个编造的
    * {@code Long.MAX_VALUE} 让 {@code size() <= capacity()} 看起来成立。
    */
-  @Test(expected = UnsupportedOperationException.class)
+  @Test(expected = CacheUnsupportedOperationException.class)
   public void testCapacityUnsupported() {
     kvCache.capacity();
   }
 
-  @Test(expected = UnsupportedOperationException.class)
+  @Test(expected = CacheUnsupportedOperationException.class)
   public void testSize() {
     kvCache.size();
   }

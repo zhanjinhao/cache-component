@@ -13,7 +13,7 @@ import java.util.function.Function;
  * <p>
  * <b>继承的规则</b>：{@link ExpiredKVCache} 的全部约定 —— 过期的 key 等同于没有值、
  * TTL 换算走 {@link ExpiredKVCache#ttlMillis}、value 为 null 时 {@code set} 按删除处理而
- * {@code setnx} 不写入、key 为 null 抛 {@link IllegalArgumentException}。
+ * {@code setnx} 不写入、key 为 null 抛 {@link CacheIllegalArgumentException}。
  * <p>
  * <b>自身差异</b>：
  * <ul>
@@ -47,7 +47,14 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
    * @param redisClient redis 客户端。由本对象创建的连接由本对象负责关闭。
    */
   public LettuceRedisKVCache(RedisClient redisClient) {
-    this(redisClient.connect(), true);
+    this(connect(redisClient), true);
+  }
+
+  /**
+   * 建连也可能因网络失败而抛异常，与后续命令同口径翻译。
+   */
+  private static StatefulRedisConnection<String, String> connect(RedisClient redisClient) {
+    return RedisCall.call("connect", redisClient::connect);
   }
 
   /**
@@ -68,10 +75,10 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
     KVCache.assertKeyNotNull(key);
     if (value == null) {
       // 必须删而不是写：lettuce 会把 null 编码成空串，get 会返回 ""，等于静默篡改数据
-      commands.del(key);
+      RedisCall.run(RedisCall.command("DEL", key), () -> commands.del(key));
       return;
     }
-    commands.set(key, value);
+    RedisCall.run(RedisCall.command("SET", key, value), () -> commands.set(key, value));
   }
 
   @Override
@@ -79,12 +86,12 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
     KVCache.assertKeyNotNull(key);
     if (value == null) {
       // 与 set(key, value) 一致：写 null 即删除，带不带 ttl 都不改变该语义
-      commands.del(key);
+      RedisCall.run(RedisCall.command("DEL", key), () -> commands.del(key));
       return;
     }
     long ttlMillis = ExpiredKVCache.ttlMillis(timeout, unit);
     // 用 psetex 而非 setex：后者只支持秒级
-    RedisInvalidExpireTime.run("set(key, value, timeout, unit)", ttlMillis,
+    RedisCall.runWithTtl(RedisCall.command("PSETEX", key, ttlMillis), ttlMillis,
             () -> commands.psetex(key, ttlMillis, value));
   }
 
@@ -95,7 +102,8 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
     if (value == null) {
       return false;
     }
-    return "OK".equals(commands.set(key, value, new SetArgs().nx()));
+    return "OK".equals(RedisCall.call(RedisCall.command("SET", key, value, "NX"),
+            () -> commands.set(key, value, new SetArgs().nx())));
   }
 
   @Override
@@ -105,7 +113,7 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
       return false;
     }
     long ttlMillis = ExpiredKVCache.ttlMillis(timeout, unit);
-    String result = RedisInvalidExpireTime.call("setnx(key, value, timeout, unit)", ttlMillis,
+    String result = RedisCall.callWithTtl(RedisCall.command("SET", key, value, "NX", "PX", ttlMillis), ttlMillis,
             () -> commands.set(key, value, new SetArgs().nx().px(ttlMillis)));
     return "OK".equals(result);
   }
@@ -113,20 +121,21 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
   @Override
   public boolean containsKey(String key) {
     KVCache.assertKeyNotNull(key);
-    Long exists = commands.exists(key);
+    Long exists = RedisCall.call(RedisCall.command("EXISTS", key),
+            () -> commands.exists(key));
     return exists != null && exists > 0;
   }
 
   @Override
   public String get(String key) {
     KVCache.assertKeyNotNull(key);
-    return commands.get(key);
+    return RedisCall.call(RedisCall.command("GET", key), () -> commands.get(key));
   }
 
   @Override
   public boolean delete(String key) {
     KVCache.assertKeyNotNull(key);
-    Long deleted = commands.del(key);
+    Long deleted = RedisCall.call(RedisCall.command("DEL", key), () -> commands.del(key));
     return deleted != null && deleted > 0;
   }
 
@@ -136,16 +145,16 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
    * 覆盖接口默认实现（get + delete 两次往返，中间别人写进来的新值会被 delete 带走、
    * 返回的却是旧值）。
    * <p>
-   * <b>要求服务端 Redis ≥ 6.2</b>；更低的版本上 {@link RedisUnknownCommand} 会把客户端
-   * 抛出的 "unknown command" 统一翻译成 {@link UnsupportedOperationException}，本方法不降级、
+   * <b>要求服务端 Redis ≥ 6.2</b>；更低的版本上 {@link RedisCall} 会把客户端抛出的
+   * "unknown command" 统一翻译成 {@link CacheUnsupportedOperationException}，本方法不降级、
    * 不兜底。
    *
-   * @throws UnsupportedOperationException 服务端不支持 {@code GETDEL} 时
+   * @throws CacheUnsupportedOperationException 服务端不支持 {@code GETDEL} 时
    */
   @Override
   public String remove(String key) {
     KVCache.assertKeyNotNull(key);
-    return RedisUnknownCommand.call("GETDEL", () -> commands.getdel(key));
+    return RedisCall.call(RedisCall.command("GETDEL", key), () -> commands.getdel(key));
   }
 
   /**
@@ -157,13 +166,12 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
    * 需要该语义时用 {@code CacheHelper#queryWithPpf}（内部加锁），或自己用
    * {@code get} + {@code setnx} 拼。
    *
-   * @throws UnsupportedOperationException 一律抛出
+   * @throws CacheUnsupportedOperationException 一律抛出
    */
   @Override
   public String computeIfAbsent(String key, Function<? super String, ? extends String> mappingFunction) {
-    throw new UnsupportedOperationException(
-            "redis 实现不支持 computeIfAbsent：它不是原子的复合操作，并发下会重复计算并互相覆盖。"
-                    + "需要该语义时用 CacheHelper#queryWithPpf（内部加锁）。");
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support computeIfAbsent.");
   }
 
   /**
@@ -172,20 +180,20 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
   @Override
   public String computeIfAbsent(String key, Function<? super String, ? extends String> mappingFunction,
                                 long timeout, TimeUnit unit) {
-    throw new UnsupportedOperationException(
-            "redis 实现不支持 computeIfAbsent：它不是原子的复合操作，并发下会重复计算并互相覆盖。"
-                    + "需要该语义时用 CacheHelper#queryWithPpf（内部加锁）。");
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support computeIfAbsent.");
   }
 
   /**
    * <b>不提供</b>：本实现拿不到"这个 cache 里现在有多少条"的口径。与 {@link #capacity()} 一样，
    * 答不上来就拒绝，不猜一个看起来成立的数字。
    *
-   * @throws UnsupportedOperationException 一律抛出
+   * @throws CacheUnsupportedOperationException 一律抛出
    */
   @Override
   public int size() {
-    throw new UnsupportedOperationException();
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support size(): the server has no per-instance entry-count metric.");
   }
 
   /**
@@ -193,12 +201,13 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
    * 编造一个数字会让 {@code size() <= capacity()} 这类判断看起来成立，而 {@link #size()}
    * 恰恰是不支持的。
    *
-   * @throws UnsupportedOperationException 一律抛出
+   * @throws CacheUnsupportedOperationException 一律抛出
    */
   @Override
   public int capacity() {
-    throw new UnsupportedOperationException(
-            "redis 实现不支持 capacity()：容量由服务端的 maxmemory-policy 全局决定，与单个 KVCache 实例无关。");
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support capacity(): capacity is determined globally by the"
+                    + " server's maxmemory-policy and is unrelated to a single KVCache instance.");
   }
 
   /**
@@ -206,7 +215,7 @@ public class LettuceRedisKVCache implements ExpiredKVCache<String, String> {
    */
   public void close() {
     if (connectionOwned) {
-      connection.close();
+      RedisCall.run("close", connection::close);
     }
   }
 

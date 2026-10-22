@@ -1,5 +1,6 @@
 package cn.addenda.component.cache.eviction;
 
+import cn.addenda.component.cache.CacheIllegalArgumentException;
 import cn.addenda.component.cache.ExpiredKVCache;
 import cn.addenda.component.cache.KVCache;
 
@@ -35,7 +36,7 @@ public interface EvictableKVCache<K, V> extends KVCache<K, V> {
    *
    * @param k key，不允许为 null
    * @param v value，为 null 时等价于 {@link KVCache#delete(Object)}
-   * @throws IllegalArgumentException k 为 null 时
+   * @throws CacheIllegalArgumentException k 为 null 时
    */
   @Override
   void set(K k, V v);
@@ -47,7 +48,7 @@ public interface EvictableKVCache<K, V> extends KVCache<K, V> {
    * @param k key，不允许为 null
    * @param v value，为 null 时不写入并返回 false
    * @return 写入成功返回 true；key 已存在、或 v 为 null 时返回 false
-   * @throws IllegalArgumentException k 为 null 时
+   * @throws CacheIllegalArgumentException k 为 null 时
    */
   @Override
   boolean setnx(K k, V v);

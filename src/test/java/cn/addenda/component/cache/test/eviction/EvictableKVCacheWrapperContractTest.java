@@ -1,6 +1,8 @@
 package cn.addenda.component.cache.test.eviction;
 
 import cn.addenda.component.base.util.SleepUtils;
+import cn.addenda.component.cache.CacheIllegalArgumentException;
+import cn.addenda.component.cache.CacheUnsupportedOperationException;
 import cn.addenda.component.cache.KVCache;
 import cn.addenda.component.cache.KVCacheWrapper;
 import cn.addenda.component.cache.SynchronizedKVCache;
@@ -78,7 +80,8 @@ public class EvictableKVCacheWrapperContractTest {
   /**
    * {@code setnx} 语义完整的那些，用于 setnx 的通用契约断言。
    * <p>
-   * {@link LruKKVCache} 不在这里 —— 它明确不支持 {@code setnx}（抛 UOE）：
+   * {@link LruKKVCache} 不在这里 —— 它明确不支持 {@code setnx}（抛
+   * {@link CacheUnsupportedOperationException}）：
    * LRU-K 的写入要过准入闸门，和"不存在就写、写了就有"对不上。
    * 它的行为在 {@link #testSetnxIsUnsupportedOnLruKKVCache()} 里单独钉。
    */
@@ -87,7 +90,7 @@ public class EvictableKVCacheWrapperContractTest {
   /**
    * @param refusesUnsupportedOps 它的 {@code setnx} / {@code computeIfAbsent} 是否是
    *                              <b>无条件拒绝</b>。是的话这两个方法不校验参数，null key
-   *                              也抛 {@link UnsupportedOperationException}
+   *                              也抛 {@link CacheUnsupportedOperationException}
    *                              （见 {@link KVCache} 的异常口径第 1 条）
    */
   private void register(String name, KVCache<String, String> cache, boolean plain, boolean setnx,
@@ -108,7 +111,7 @@ public class EvictableKVCacheWrapperContractTest {
             new LfuHashMapKVCache<>(CAPACITY), true, true, false);
     register("LfuLruKVCache",
             new LfuLruKVCache<>(CAPACITY), true, true, false);
-    // setnx / computeIfAbsent 无条件拒绝：UOE 优先于参数校验
+    // setnx / computeIfAbsent 无条件拒绝：CacheUnsupportedOperationException 优先于参数校验
     register("LruKKVCache",
             new LruKHashMapKVCache<>(CAPACITY, 1), true, false, true);
     // 本实现只跑 null 相关断言（见下面两个 false），threshold 取多少都不影响它们。
@@ -116,7 +119,7 @@ public class EvictableKVCacheWrapperContractTest {
     // 要关闭提升得给一个极大的值，见 LruGenerationKVCache#threshold。
     // 两个开关都给 false：它只跑 null 相关断言。淘汰顺序那两组是单代实现的口径
     // （本类是"两代 + 中途插入"），纳入只会得到一堆不适用的断言 ——
-    // plain 那组因此压根不会遍历到它，顺序覆盖在 LruGenerationKVCacheTest 里。
+    // plain 那组因此根本不会遍历到它，顺序覆盖在 LruGenerationKVCacheTest 里。
     register("LruGenerationKVCache",
             new LruGenerationHashMapKVCache<>(CAPACITY, CAPACITY, 0), false, false, false);
   }
@@ -182,7 +185,8 @@ public class EvictableKVCacheWrapperContractTest {
   /**
    * setnx 的 value 为 null 时和 set 一致：表示"没有值"，不写入、返回 false，且不动已有值。
    * <p>
-   * {@link LruKKVCache} 不在这组里 —— 它的 {@code setnx} 整个都不支持，抛 UOE，
+   * {@link LruKKVCache} 不在这组里 —— 它的 {@code setnx} 整个都不支持，抛
+   * {@link CacheUnsupportedOperationException}，
    * 所以"null 时返回 false"这条契约在它身上不适用。
    */
   @Test
@@ -209,10 +213,10 @@ public class EvictableKVCacheWrapperContractTest {
    * {@link KVCache#computeIfAbsent(Object, java.util.function.Function)} 两个复合默认方法。
    * <p>
    * 但"拒绝"的类型要按 {@link KVCache} 的异常口径分：<b>无条件拒绝某操作的实现不校验参数</b>，
-   * null key 也抛 {@link UnsupportedOperationException}（{@link LruKKVCache} 的
+   * null key 也抛 {@link CacheUnsupportedOperationException}（{@link LruKKVCache} 的
    * {@code setnx} / {@code computeIfAbsent} 属于这一类，登记时标了
    * {@code refusesUnsupportedOps}）。{@code remove} 不在其中 —— {@code LruKKVCache} 没有
-   * 覆盖它，走默认实现，先校验 key，因此仍是 IAE。
+   * 覆盖它，走默认实现，先校验 key，因此仍是 CacheIllegalArgumentException。
    */
   @Test
   public void testNullKeyRejected() {
@@ -234,12 +238,13 @@ public class EvictableKVCacheWrapperContractTest {
       assertKeyRejected(name + ": delete", () -> cache.delete(null));
       assertKeyRejected(name + ": remove", () -> cache.remove(null));
 
-      // 两个复合默认方法同上：无条件拒绝时 UOE 优先，否则入口 assertKeyNotNull。
+      // 两个复合默认方法同上：无条件拒绝时 CacheUnsupportedOperationException 优先，
+      // 否则入口 assertKeyNotNull。
       if (refusesUnsupportedOps) {
         CacheAssertions.assertNotSupported(name + ": computeIfAbsent",
                 () -> cache.computeIfAbsent(null, k -> "v"));
         CacheAssertions.assertNotSupported(
-                name + ": computeIfAbsent(null, null) 仍是 UOE，不是 NPE",
+                name + ": computeIfAbsent(null, null) 仍是 CacheUnsupportedOperationException，不是 NPE",
                 () -> cache.computeIfAbsent(null, null));
       } else {
         assertKeyRejected(name + ": computeIfAbsent",
@@ -308,7 +313,7 @@ public class EvictableKVCacheWrapperContractTest {
 
   /**
    * <b>{@link LruKKVCache} 的 {@code setnx} 明确不支持</b>，抛
-   * {@link UnsupportedOperationException}。
+   * {@link CacheUnsupportedOperationException}。
    * <p>
    * 它和"攒够 {@code threshold} 次访问才落地"这套准入语义对不上：
    * 门槛 >= 2 时本来会恒返回 false，调用方分不清是"已存在"还是"没落地"。
@@ -341,7 +346,8 @@ public class EvictableKVCacheWrapperContractTest {
    * 显形；分代实现要先把前两条提升进年轻代并把它填满，再看命中仍留在老年代的那条 ——
    * 那时提升得先给年轻代腾位置，会连带淘汰一条无关数据（本用例最狠的一种后果）。
    * <p>
-   * {@link LruKKVCache} 不在本用例里：它明确拒绝 {@code computeIfAbsent}（抛 UOE），
+   * {@link LruKKVCache} 不在本用例里：它明确拒绝 {@code computeIfAbsent}
+   * （抛 {@link CacheUnsupportedOperationException}），
    * 根本走不到命中的分支。
    */
   @Test
@@ -555,8 +561,8 @@ public class EvictableKVCacheWrapperContractTest {
   private void assertKeyRejected(String what, Runnable invocation) {
     try {
       invocation.run();
-      Assert.fail(what + "(null, ...) 应该抛 IllegalArgumentException");
-    } catch (IllegalArgumentException expected) {
+      Assert.fail(what + "(null, ...) 应该抛 CacheIllegalArgumentException");
+    } catch (CacheIllegalArgumentException expected) {
       // ok
     }
   }

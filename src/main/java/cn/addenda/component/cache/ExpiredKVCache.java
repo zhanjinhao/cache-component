@@ -10,7 +10,7 @@ import java.util.function.Function;
  * 与 {@link KVCache} 的关系是<b>纯增量</b>：三个 TTL 入口都是新增方法，继承来的方法
  * 签名与结果口径不变。
  * <p>
- * <b>核心语义：过期的 key 等同于没有值</b>，即与"压根没有这个 key"完全等价。因此
+ * <b>核心语义：过期的 key 等同于没有值</b>，即与"根本没有这个 key"完全等价。因此
  * {@link #get(Object)} / {@link #containsKey(Object)} / {@link #remove(Object)} 与两个
  * {@code setnx} 一律按"没有值"回答：读不到、查不到、{@code remove} 返回 null、
  * {@code setnx} 不会被过期的旧值挡住。
@@ -18,10 +18,14 @@ import java.util.function.Function;
  * <b>TTL 的换算规则只有一份</b>，即 {@link #ttlMillis}；实现不得另写一份。
  * <p>
  * <b>超大 TTL</b>：换算结果溢出时 {@link #ttlMillis} 饱和到 {@link Long#MAX_VALUE}。
- * 内存实现据此得到"永不过期"（见 {@link #deadline}）；redis 实现的服务端算不了
- * {@code 当前时刻 + TTL}（64 位溢出），会拒绝该 TTL，实现统一翻译成
- * {@link IllegalArgumentException} 且<b>不写入</b>（原始客户端异常在 {@code cause} 上）。
- * 这是两者之间唯一一处 TTL 语义差异 —— 需要"永不过期"时请使用不带 TTL 的重载。
+ * 内存实现据此得到"永不过期"（见 {@link #deadline}）；redis 实现不接受这个 TTL，因为服务端
+ * 算不了 {@code 当前时刻 + TTL}（64 位溢出）。组件统一拒绝成
+ * {@link CacheIllegalArgumentException} 且<b>不写入</b>（原始客户端异常在 {@code cause} 上）。
+ * <p>
+ * 注意这里的拒绝点：redis 实现<b>没有在入口校验</b> TTL，参数是下发之后由服务端拒绝、再由实现
+ * 归一成"组件不允许该参数穿透"的。调用方只认异常类型，不必关心校验发生在入口还是存储层。
+ * <p>
+ * 这是内存与 redis 之间唯一一处 TTL 语义差异 —— 需要"永不过期"时请使用不带 TTL 的重载。
  * <p>
  * <b>时钟语义</b>：到期判定与到期时刻计算都以 {@link System#currentTimeMillis()} 为准，
  * 即墙上时钟，没有单调时钟补偿 —— 时钟回拨会让条目活得更久，两台机器时钟有偏差时
@@ -112,9 +116,9 @@ public interface ExpiredKVCache<K, V> extends KVCache<K, V> {
    * @param mappingFunction 不存在（或已过期）时的取值函数，不允许为 null；<b>不得操作本 cache</b>
    * @param timeout         新值的过期时间
    * @param timeunit        过期时间单位
-   * @throws IllegalArgumentException      key 为 null 时
-   * @throws NullPointerException          mappingFunction 为 null 时
-   * @throws UnsupportedOperationException 实现不支持时（此时不校验参数）
+   * @throws CacheIllegalArgumentException      key 为 null 时
+   * @throws NullPointerException               mappingFunction 为 null 时
+   * @throws CacheUnsupportedOperationException 实现不支持时（此时不校验参数）
    */
   default V computeIfAbsent(K key, Function<? super K, ? extends V> mappingFunction, long timeout, TimeUnit timeunit) {
     KVCache.assertKeyNotNull(key);

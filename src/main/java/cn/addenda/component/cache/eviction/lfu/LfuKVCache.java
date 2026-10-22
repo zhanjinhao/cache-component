@@ -1,5 +1,6 @@
 package cn.addenda.component.cache.eviction.lfu;
 
+import cn.addenda.component.cache.CacheUnsupportedOperationException;
 import cn.addenda.component.cache.HashMapKVCache;
 import cn.addenda.component.cache.KVCache;
 import cn.addenda.component.cache.KVCacheWrapper;
@@ -7,7 +8,9 @@ import cn.addenda.component.cache.SortedKVCache;
 import cn.addenda.component.cache.TreeMapKVCache;
 import cn.addenda.component.cache.eviction.EvictableKVCacheWrapper;
 
-import java.util.Collections;
+import java.util.AbstractSet;
+import java.util.Collection;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.function.Function;
@@ -81,9 +84,10 @@ public abstract class LfuKVCache<K, V> extends EvictableKVCacheWrapper<K, V> {
   /**
    * 计数表的<b>只读观测入口</b>：读操作实时转发到活账本；
    * {@code set} / {@code setnx} / {@code delete} / {@code computeIfAbsent} / {@code remove}
-   * 一律抛 {@link UnsupportedOperationException}。五个方法都<b>不校验参数</b>
+   * 一律抛 {@link CacheUnsupportedOperationException}。五个方法都<b>不校验参数</b>
    * （无条件拒绝，见 {@code KVCache} 的异常口径第 1 条）；{@code remove} 也显式覆盖了，
-   * 否则接口默认实现会在入口先校验 key，{@code remove(null)} 就变成 IAE。
+   * 否则接口默认实现会在入口先校验 key，{@code remove(null)} 就变成
+   * {@link CacheIllegalArgumentException}（参数错误），与其它四个方法的口径不一致。
    * <p>
    * 返回外壳而非拷贝：{@link KVCache} 没有 keySet、这张表枚举不出来，且拷贝只是某一瞬间的
    * 数据。外壳零拷贝、实时，并把误写变成显式失败。
@@ -290,7 +294,7 @@ public abstract class LfuKVCache<K, V> extends EvictableKVCacheWrapper<K, V> {
 
   /**
    * 只读的 {@link KVCache}：读操作转发给被包装的 cache，写操作一律抛
-   * {@link UnsupportedOperationException}。用于把自己的内部结构交出去给别人看时防止被改。
+   * {@link CacheUnsupportedOperationException}。用于把自己的内部结构交出去给别人看时防止被改。
    * <p>
    * 只读范围：{@link #set} / {@link #setnx} / {@link #delete} / {@link #computeIfAbsent} /
    * {@link #remove} 直接抛；{@link #get} / {@link #containsKey} / {@link #size} /
@@ -340,7 +344,8 @@ public abstract class LfuKVCache<K, V> extends EvictableKVCacheWrapper<K, V> {
 
     /**
      * <b>一并覆盖成无条件抛</b>：接口默认实现是"get 后 delete"，它会在入口先校验 key，
-     * 于是 {@code remove(null)} 报 IAE、{@code delete(null)} 报 UOE —— 同一个只读外壳上
+     * 于是 {@code remove(null)} 抛 {@link CacheIllegalArgumentException}（key 为 null）、
+     * {@code delete(null)} 抛 {@link CacheUnsupportedOperationException}（只读）—— 同一个只读外壳上
      * 出现两种口径。无条件拒绝的操作一律不校验参数，见 {@link KVCache} 的异常口径第 1 条。
      */
     @Override
@@ -360,8 +365,8 @@ public abstract class LfuKVCache<K, V> extends EvictableKVCacheWrapper<K, V> {
 
     // size() 由 KVCacheWrapper 转发；remove 见上面的显式覆盖。
 
-    private UnsupportedOperationException readOnly() {
-      return new UnsupportedOperationException(
+    private CacheUnsupportedOperationException readOnly() {
+      return new CacheUnsupportedOperationException(
               "只读的 KVCache：本对象只提供读操作。");
     }
 
@@ -399,7 +404,7 @@ public abstract class LfuKVCache<K, V> extends EvictableKVCacheWrapper<K, V> {
 
     @Override
     public Set<C> keySet() {
-      return Collections.unmodifiableSet(new LinkedHashSet<>(sortedDelegate().keySet()));
+      return new ReadOnlySet<>(new LinkedHashSet<>(sortedDelegate().keySet()));
     }
 
     /**
@@ -413,6 +418,89 @@ public abstract class LfuKVCache<K, V> extends EvictableKVCacheWrapper<K, V> {
 
     private SortedKVCache<C, LinkedHashSet<E>> sortedDelegate() {
       return (SortedKVCache<C, LinkedHashSet<E>>) getKvCacheDelegate();
+    }
+
+  }
+
+  /**
+   * 只读 {@link Set}：{@link java.util.Collections#unmodifiableSet} 的写方法抛的是 JDK
+   * {@code UnsupportedOperationException}，与本组件"拒绝一律用
+   * {@link CacheUnsupportedOperationException}"的口径不一致。这里把所有写入口（含
+   * {@code iterator().remove()}）换成该类型。
+   *
+   * @param <E> 元素类型
+   */
+  private static class ReadOnlySet<E> extends AbstractSet<E> {
+
+    private final Set<E> delegate;
+
+    private ReadOnlySet(Set<E> delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override
+    public Iterator<E> iterator() {
+      Iterator<E> iterator = delegate.iterator();
+      return new Iterator<E>() {
+        @Override
+        public boolean hasNext() {
+          return iterator.hasNext();
+        }
+
+        @Override
+        public E next() {
+          return iterator.next();
+        }
+
+        @Override
+        public void remove() {
+          throw readOnly();
+        }
+      };
+    }
+
+    @Override
+    public int size() {
+      return delegate.size();
+    }
+
+    @Override
+    public boolean contains(Object o) {
+      return delegate.contains(o);
+    }
+
+    @Override
+    public boolean add(E e) {
+      throw readOnly();
+    }
+
+    @Override
+    public boolean remove(Object o) {
+      throw readOnly();
+    }
+
+    @Override
+    public void clear() {
+      throw readOnly();
+    }
+
+    @Override
+    public boolean addAll(Collection<? extends E> c) {
+      throw readOnly();
+    }
+
+    @Override
+    public boolean removeAll(Collection<?> c) {
+      throw readOnly();
+    }
+
+    @Override
+    public boolean retainAll(Collection<?> c) {
+      throw readOnly();
+    }
+
+    private static CacheUnsupportedOperationException readOnly() {
+      return new CacheUnsupportedOperationException("只读的统计表视图：本对象只提供读操作。");
     }
 
   }

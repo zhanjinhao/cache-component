@@ -31,7 +31,7 @@ public abstract class KVCacheWrapper<K, V> implements KVCache<K, V> {
 
   protected KVCacheWrapper(KVCache<K, V> kvCacheDelegate) {
     if (kvCacheDelegate == null) {
-      throw new IllegalArgumentException("kvCacheDelegate is null! ");
+      throw new CacheIllegalArgumentException("kvCacheDelegate must not be null!");
     }
     this.kvCacheDelegate = kvCacheDelegate;
   }

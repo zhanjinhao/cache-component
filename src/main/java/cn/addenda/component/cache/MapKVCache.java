@@ -31,7 +31,7 @@ public abstract class MapKVCache<K, V> implements KVCache<K, V> {
 
   protected MapKVCache(Map<K, V> map) {
     if (map == null) {
-      throw new IllegalArgumentException("map is null!");
+      throw new CacheIllegalArgumentException("map must not be null!");
     }
     this.map = map;
   }

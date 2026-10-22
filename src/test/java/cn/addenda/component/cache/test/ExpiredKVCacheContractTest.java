@@ -1,6 +1,8 @@
 package cn.addenda.component.cache.test;
 
 import cn.addenda.component.base.util.SleepUtils;
+import cn.addenda.component.cache.CacheIllegalArgumentException;
+import cn.addenda.component.cache.CacheUnsupportedOperationException;
 import cn.addenda.component.cache.ExpiredConcurrentHashMapKVCache;
 import cn.addenda.component.cache.ExpiredHashMapKVCache;
 import cn.addenda.component.cache.ExpiredKVCache;
@@ -116,7 +118,7 @@ public class ExpiredKVCacheContractTest {
 
   /**
    * 明确拒绝提供 {@code computeIfAbsent} 的实现（两个重载都抛
-   * {@link UnsupportedOperationException}）。
+   * {@link CacheUnsupportedOperationException}）。
    * <p>
    * 基于 redis 的那四个：它们做不到原子的"不存在则计算并写入"，于是选择不给非原子版本。
    * 这是它们能声明 L2 的前提 —— 对外暴露的方法全部原子，做不到的那个直接拒绝。
@@ -176,7 +178,9 @@ public class ExpiredKVCacheContractTest {
    * 登记一个实现，顺便声明它的性质 —— 用例按性质挑组跑，不必在别处再算一遍。
    *
    * @param threadSafe               它自身是否承诺线程安全
-   * @param computeIfAbsentSupported 它是否支持 {@code computeIfAbsent}（{@code false} 即"明确拒绝"，抛 UOE）
+   * @param computeIfAbsentSupported 它是否支持 {@code computeIfAbsent}
+   *                                 （{@code false} 即"明确拒绝"，
+   *                                 抛 {@link CacheUnsupportedOperationException}）
    * @param computeIfAbsentAtomic    它是否把 {@code computeIfAbsent} 做成了原子的（不支持时就无所谓了）
    * @param l1PerThread              L1 并发用例里每个线程写多少个独占 key；不承诺线程安全的传 0
    */
@@ -583,7 +587,7 @@ public class ExpiredKVCacheContractTest {
    * <p>
    * 只跑"支持 computeIfAbsent 但用默认实现"的那几个：覆盖成原子实现的断言正好相反
    * （见 {@link #testComputeIfAbsentIsAtomicUnderConcurrency()}），
-   * 明确拒绝提供的那几个压根不能调（见 {@link #testComputeIfAbsentNotSupported()}）。
+   * 明确拒绝提供的那几个根本不能调（见 {@link #testComputeIfAbsentNotSupported()}）。
    */
   @Test
   public void testComputeIfAbsentIsNotAtomicUnderConcurrency() throws Exception {
@@ -724,8 +728,9 @@ public class ExpiredKVCacheContractTest {
    * <ul>
    *   <li>内存实现：{@link ExpiredKVCache#deadline} 溢出时饱和到 {@link Long#MAX_VALUE}，
    *       即"永不过期"，写入成功；</li>
-   *   <li>redis 实现：服务端回 {@code ERR invalid expire time}，实现统一翻译成
-   *       {@link IllegalArgumentException}，<b>且不写入</b>（无半写状态）。</li>
+   *   <li>redis 实现：参数下发后服务端回 {@code ERR invalid expire time}，实现把存储层的拒绝
+   *       归一成 {@link CacheIllegalArgumentException}（组件不允许该参数穿透），<b>且不写入</b>
+   *       （无半写状态）。</li>
    * </ul>
    * 所以 {@code Long.MAX_VALUE} 毫秒/天都会被拒绝（{@code ttlMillis} 饱和到
    * {@link Long#MAX_VALUE}）；而 {@code Long.MAX_VALUE} <b>微秒</b>换算后只有
@@ -786,15 +791,15 @@ public class ExpiredKVCacheContractTest {
    * <p>
    * 期望分两组，正是本组件对"参数校验"与"明确拒绝"这两件事的取舍：
    * <ul>
-   *   <li><b>支持该操作的实现</b>：{@code key} 为 null 一律 {@link IllegalArgumentException}，
+   *   <li><b>支持该操作的实现</b>：{@code key} 为 null 一律 {@link CacheIllegalArgumentException}，
    *       且 {@code computeIfAbsent(null, null, ttl)} 报的也必须是 key 的问题，
    *       <b>不是</b> {@link NullPointerException} —— 两个参数都错时，key 的错优先；</li>
    *   <li><b>明确拒绝该操作的实现</b>（四个 redis 实现）：直接抛
-   *       {@link UnsupportedOperationException}，<b>不校验参数</b> ——
+   *       {@link CacheUnsupportedOperationException}，<b>不校验参数</b> ——
    *       整个操作都不支持时，"null 该怎么处理"不再适用。
    *       同一个口径也适用于 {@code LruKKVCache}（不在本组，它属于 {@code KVCache} 那一层）：
    *       它的 {@code setnx} / {@code computeIfAbsent} 同样不校验参数。
-   *       唯一保留"先校验 key"的 UOE 场景是依赖服务端能力的 {@code remove}
+   *       唯一保留"先校验 key"的明确拒绝场景是依赖服务端能力的 {@code remove}
    *       （{@code GETDEL} 要求较新的服务端版本），见 {@link KVCache} 的异常口径。</li>
    * </ul>
    */
@@ -811,9 +816,11 @@ public class ExpiredKVCacheContractTest {
         CacheAssertions.assertRejected(name + ": computeIfAbsent(null, null, ttl) 报 key 的问题，不是 NPE",
                 () -> cache.computeIfAbsent(null, null, 1, TimeUnit.MINUTES));
       } else {
-        CacheAssertions.assertNotSupported(name + ": 拒绝组直接抛 UOE，不校验参数",
+        CacheAssertions.assertNotSupported(
+                name + ": 拒绝组直接抛 CacheUnsupportedOperationException，不校验参数",
                 () -> cache.computeIfAbsent(null, k -> "v", 1, TimeUnit.MINUTES));
-        CacheAssertions.assertNotSupported(name + ": 两个参数都 null 也是 UOE",
+        CacheAssertions.assertNotSupported(
+                name + ": 两个参数都 null 也是 CacheUnsupportedOperationException",
                 () -> cache.computeIfAbsent(null, null, 1, TimeUnit.MINUTES));
       }
     }
@@ -821,7 +828,7 @@ public class ExpiredKVCacheContractTest {
 
   /**
    * <b>redis 那四个实现明确拒绝提供 computeIfAbsent</b>：两个重载都抛
-   * {@link UnsupportedOperationException}。
+   * {@link CacheUnsupportedOperationException}。
    * <p>
    * 这是它们能声明 L2 的前提 —— {@code computeIfAbsent} 的语义是原子的 check-then-act，
    * 而 redis 的 get 与 set 是两次往返，中间必然有窗口（{@code mappingFunction} 是本地代码，
@@ -830,7 +837,8 @@ public class ExpiredKVCacheContractTest {
    * 需要该语义时走 {@code CacheHelper} 的 {@code queryWithPpf}（内部用 lockAllocator 加锁）。
    * <p>
    * 另外一个口径：拒绝组<b>不校验参数</b>，{@code computeIfAbsent(null, null, ttl)} 抛的也是
-   * UOE 而不是 IAE/NPE —— 整个操作都不支持时，"null 该怎么处理"不再适用。
+   * {@link CacheUnsupportedOperationException} 而不是 {@link CacheIllegalArgumentException}/NPE ——
+   * 整个操作都不支持时，"null 该怎么处理"不再适用。
    * 见 {@link #testNullKeyMatrixOnTtlComputeIfAbsent()}。
    */
   @Test
@@ -957,11 +965,11 @@ public class ExpiredKVCacheContractTest {
    * <b>非 ASCII 的 value 要原样往返。</b>
    * <p>
    * 各家的编码路径完全不同（lettuce 的 StringCodec、redisson 的 Kryo5、spring 的
-   * StringRedisSerializer、内存实现压根不编码），只要有一家默认字符集不是 UTF-8，
+   * StringRedisSerializer、内存实现根本不编码），只要有一家默认字符集不是 UTF-8，
    * 表现就是"写进去、读出来是乱码"，而且不报任何错。
    * <p>
    * 这条覆盖原先只存在于 {@code TestRedissonRedisKVCache} 的检查 —— 那边只测了 redisson，
-   * 而且断言走的是裸 {@code RBucket}、压根没经过 KVCache；放到这里才对全部实现生效。
+   * 而且断言走的是裸 {@code RBucket}、根本没经过 KVCache；放到这里才对全部实现生效。
    */
   @Test
   public void testNonAsciiValueRoundTrips() {
@@ -1210,12 +1218,13 @@ public class ExpiredKVCacheContractTest {
   }
 
   /**
-   * <b>超大 TTL 在四个 redis 实现上统一拒绝成 {@link IllegalArgumentException}，且不写入。</b>
+   * <b>超大 TTL 在四个 redis 实现上统一拒绝成 {@link CacheIllegalArgumentException}，且不写入。</b>
    * <p>
-   * 触发条件是服务端算 {@code 当前时刻 + TTL} 时 64 位溢出，四个客户端拿到的回文都是
-   * {@code ERR invalid expire time in psetex/set}；但客户端抛出的异常类型各不相同
-   * （lettuce / redisson / spring-data-redis 三套），由 {@code RedisInvalidExpireTime}
-   * 统一翻译成 {@link IllegalArgumentException}，原始异常挂在 {@code cause} 上。
+   * 这条路径<b>不在入口校验</b>：参数会先下发给存储层，服务端算 {@code 当前时刻 + TTL} 时
+   * 64 位溢出，回 {@code ERR invalid expire time in psetex/set}；四个客户端抛出的异常类型
+   * 各不相同（lettuce / redisson / spring-data-redis 三套），由 {@code RedisCall} 把存储层的
+   * 拒绝归一成组件的 {@link CacheIllegalArgumentException}，原始异常挂在 {@code cause} 上。
+   * 对调用方而言，结论与入口校验一样：组件不允许这个参数穿透到存储层。
    * <p>
    * 分界的精确描述见 {@link #testTtlBoundaryMatrix()}；内存侧由
    * {@link #testHugeTtlSaturatesOnInMemoryImpls()} 覆盖。
@@ -1239,14 +1248,14 @@ public class ExpiredKVCacheContractTest {
   }
 
   /**
-   * 断言抛的是统一的 {@link IllegalArgumentException}：客户端原始异常挂在 cause 上，
+   * 断言抛的是统一的 {@link CacheIllegalArgumentException}：客户端原始异常挂在 cause 上，
    * 消息里带上换算后的毫秒值（否则调用方分不清是 TTL 的问题还是别的问题）。
    */
   private void assertInvalidExpireTime(String what, Runnable invocation) {
     try {
       invocation.run();
-      Assert.fail(what + "：超大 TTL 应该被拒绝");
-    } catch (IllegalArgumentException expected) {
+      Assert.fail(what + "：超大 TTL 应该被组件拒绝（允许由存储层拒绝后归一）");
+    } catch (CacheIllegalArgumentException expected) {
       Assert.assertNotNull(what + "：客户端原始异常应挂在 cause 上", expected.getCause());
       Assert.assertTrue(what + ": 消息里要带上换算后的毫秒值：" + expected.getMessage(),
               expected.getMessage().contains(String.valueOf(Long.MAX_VALUE)));

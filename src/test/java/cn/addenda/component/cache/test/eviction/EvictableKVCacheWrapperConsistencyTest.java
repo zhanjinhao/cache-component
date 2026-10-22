@@ -53,7 +53,8 @@ public class EvictableKVCacheWrapperConsistencyTest {
 
   private void before() {
     impls.clear();
-    // LruKKVCache 明确拒绝 setnx 与 computeIfAbsent（都抛 UOE）—— 它的写入要过准入闸门，
+    // LruKKVCache 明确拒绝 setnx 与 computeIfAbsent（都抛 CacheUnsupportedOperationException）
+    // —— 它的写入要过准入闸门，
     // 与"不存在就写、写了就有"对不上。两个开关是分开的：以后可能出现只拒绝其中一个的实现。
     register("LruHashMapKVCache", true, true,
             delegate -> new LruOverDelegate<>(CAPACITY, delegate));
@@ -409,7 +410,7 @@ public class EvictableKVCacheWrapperConsistencyTest {
    * <b>{@code setnx(k, null)} 连账本都不碰</b>：不只数据层没写入，队列 / 计数表里也不能多出一条。
    * <p>
    * 与 {@link #testSetNullClearsTheLedger()} 是同一件事的两面：{@code set(k, null)} 是"删"，
-   * 账本要跟着清；{@code setnx(k, null)} 是"无事可做"，账本压根不该动。
+   * 账本要跟着清；{@code setnx(k, null)} 是"无事可做"，账本根本不该动。
    * {@code EvictableKVCacheWrapperOperationBoundaryTest#testSetnxNullValueIsCompletelyNoOp()}
    * 只看得见数据层（{@code size()} 与底层条数同源），账本这一半只能在这里直接读。
    * <p>

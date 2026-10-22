@@ -195,7 +195,7 @@ public class LruKKVCacheAdmissionTest {
   // ------------------------------------------------------------------
 
   /**
-   * <b>{@code setnx} 在这个实现上不支持，一律抛 {@link UnsupportedOperationException}。</b>
+   * <b>{@code setnx} 在这个实现上不支持，一律抛 {@code CacheUnsupportedOperationException}。</b>
    * <p>
    * 它和"先攒够 {@code threshold} 次访问才落地"这套准入语义对不上：
    * <ul>

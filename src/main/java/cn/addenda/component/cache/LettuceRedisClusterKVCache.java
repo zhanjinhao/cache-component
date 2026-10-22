@@ -13,7 +13,7 @@ import java.util.function.Function;
  * <p>
  * <b>继承的规则</b>：{@link ExpiredKVCache} 的全部约定 —— 过期的 key 等同于没有值、
  * TTL 换算走 {@link ExpiredKVCache#ttlMillis}、value 为 null 时 {@code set} 按删除处理而
- * {@code setnx} 不写入、key 为 null 抛 {@link IllegalArgumentException}。
+ * {@code setnx} 不写入、key 为 null 抛 {@link CacheIllegalArgumentException}。
  * <p>
  * <b>自身差异</b>：与 {@link LettuceRedisKVCache} 完全一致 —— TTL 交给服务端维护
  * （{@code PSETEX}）、{@link #remove(String)} 用 {@code GETDEL}、两个 {@code setnx} 用
@@ -46,7 +46,14 @@ public class LettuceRedisClusterKVCache implements ExpiredKVCache<String, String
    * @param redisClusterClient 集群客户端。由本对象创建的连接由本对象负责关闭。
    */
   public LettuceRedisClusterKVCache(RedisClusterClient redisClusterClient) {
-    this(redisClusterClient.connect(), true);
+    this(connect(redisClusterClient), true);
+  }
+
+  /**
+   * 建连也可能因网络失败而抛异常，与后续命令同口径翻译。
+   */
+  private static StatefulRedisClusterConnection<String, String> connect(RedisClusterClient redisClusterClient) {
+    return RedisCall.call("connect", redisClusterClient::connect);
   }
 
   /**
@@ -70,10 +77,10 @@ public class LettuceRedisClusterKVCache implements ExpiredKVCache<String, String
       // redis 中不存在 java null 值。写入 null 在语义上表示"没有值"，等价于删除该 key。
       // 该处理保证 get 返回 null，与其它 ExpiredKVCache 实现保持一致。
       // 若不删除，lettuce 会将 null 编码为空串，get 返回 ""，等同于静默篡改数据。
-      commands.del(key);
+      RedisCall.run(RedisCall.command("DEL", key), () -> commands.del(key));
       return;
     }
-    commands.set(key, value);
+    RedisCall.run(RedisCall.command("SET", key, value), () -> commands.set(key, value));
   }
 
   @Override
@@ -81,12 +88,12 @@ public class LettuceRedisClusterKVCache implements ExpiredKVCache<String, String
     KVCache.assertKeyNotNull(key);
     if (value == null) {
       // 与 set(key, value) 一致：写入 null 即删除该 key，是否携带 ttl 均不改变该语义。
-      commands.del(key);
+      RedisCall.run(RedisCall.command("DEL", key), () -> commands.del(key));
       return;
     }
     long ttlMillis = ExpiredKVCache.ttlMillis(timeout, unit);
     // lettuce 仅提供秒级的 setex，此处使用 psetex 以支持毫秒级的 ttl。
-    RedisInvalidExpireTime.run("set(key, value, timeout, unit)", ttlMillis,
+    RedisCall.runWithTtl(RedisCall.command("PSETEX", key, ttlMillis), ttlMillis,
             () -> commands.psetex(key, ttlMillis, value));
   }
 
@@ -99,7 +106,8 @@ public class LettuceRedisClusterKVCache implements ExpiredKVCache<String, String
       return false;
     }
     // SET key value NX：redis 单命令原子操作。
-    return "OK".equals(commands.set(key, value, new SetArgs().nx()));
+    return "OK".equals(RedisCall.call(RedisCall.command("SET", key, value, "NX"),
+            () -> commands.set(key, value, new SetArgs().nx())));
   }
 
   @Override
@@ -110,7 +118,7 @@ public class LettuceRedisClusterKVCache implements ExpiredKVCache<String, String
     }
     // SET key value NX PX ttl。
     long ttlMillis = ExpiredKVCache.ttlMillis(timeout, unit);
-    String result = RedisInvalidExpireTime.call("setnx(key, value, timeout, unit)", ttlMillis,
+    String result = RedisCall.callWithTtl(RedisCall.command("SET", key, value, "NX", "PX", ttlMillis), ttlMillis,
             () -> commands.set(key, value, new SetArgs().nx().px(ttlMillis)));
     return "OK".equals(result);
   }
@@ -118,70 +126,71 @@ public class LettuceRedisClusterKVCache implements ExpiredKVCache<String, String
   @Override
   public boolean containsKey(String key) {
     KVCache.assertKeyNotNull(key);
-    Long exists = commands.exists(key);
+    Long exists = RedisCall.call(RedisCall.command("EXISTS", key),
+            () -> commands.exists(key));
     return exists != null && exists > 0;
   }
 
   @Override
   public String get(String key) {
     KVCache.assertKeyNotNull(key);
-    return commands.get(key);
+    return RedisCall.call(RedisCall.command("GET", key), () -> commands.get(key));
   }
 
   @Override
   public boolean delete(String key) {
     KVCache.assertKeyNotNull(key);
-    Long deleted = commands.del(key);
+    Long deleted = RedisCall.call(RedisCall.command("DEL", key), () -> commands.del(key));
     return deleted != null && deleted > 0;
   }
 
   /**
    * 原子地取值并删除，单条命令 {@code GETDEL}，理由见 {@link LettuceRedisKVCache#remove(String)}。
    *
-   * @throws UnsupportedOperationException 服务端不支持 {@code GETDEL} 时，见
-   *                                       {@link LettuceRedisKVCache#remove(String)}
+   * @throws CacheUnsupportedOperationException 服务端不支持 {@code GETDEL} 时，见
+   *                                          {@link LettuceRedisKVCache#remove(String)}
    */
   @Override
   public String remove(String key) {
     KVCache.assertKeyNotNull(key);
-    return RedisUnknownCommand.call("GETDEL", () -> commands.getdel(key));
+    return RedisCall.call(RedisCall.command("GETDEL", key), () -> commands.getdel(key));
   }
 
   /**
    * <b>不提供</b>，与 {@link LettuceRedisKVCache} 同，
    * 见 {@link LettuceRedisKVCache#computeIfAbsent(String, Function)} 的说明。
    *
-   * @throws UnsupportedOperationException 一律抛出
+   * @throws CacheUnsupportedOperationException 一律抛出
    */
   @Override
   public String computeIfAbsent(String key, Function<? super String, ? extends String> mappingFunction) {
-    throw new UnsupportedOperationException(
-            "redis 实现不支持 computeIfAbsent：它不是原子的复合操作，并发下会重复计算并互相覆盖。"
-                    + "需要该语义时用 CacheHelper#queryWithPpf（内部加锁）。");
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support computeIfAbsent.");
   }
 
   @Override
   public String computeIfAbsent(String key, Function<? super String, ? extends String> mappingFunction,
                                 long timeout, TimeUnit unit) {
-    throw new UnsupportedOperationException(
-            "redis 实现不支持 computeIfAbsent：它不是原子的复合操作，并发下会重复计算并互相覆盖。"
-                    + "需要该语义时用 CacheHelper#queryWithPpf（内部加锁）。");
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support computeIfAbsent.");
   }
 
   @Override
   public int size() {
-    throw new UnsupportedOperationException();
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support size(): the server has no per-instance entry-count metric.");
   }
 
   /**
    * <b>不提供</b>，理由见 {@link LettuceRedisKVCache#capacity()}。
    *
-   * @throws UnsupportedOperationException 一律抛出
+   * @throws CacheUnsupportedOperationException 一律抛出
    */
   @Override
   public int capacity() {
-    throw new UnsupportedOperationException(
-            "redis 实现不支持 capacity()：容量由服务端的 maxmemory-policy 全局决定，与单个 KVCache 实例无关。");
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support capacity(): capacity is determined globally by the"
+                    + " server's maxmemory-policy and is unrelated to a single KVCache instance.");
   }
 
   /**
@@ -189,7 +198,7 @@ public class LettuceRedisClusterKVCache implements ExpiredKVCache<String, String
    */
   public void close() {
     if (connectionOwned) {
-      connection.close();
+      RedisCall.run("close", connection::close);
     }
   }
 

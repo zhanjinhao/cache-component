@@ -377,7 +377,7 @@ public class LfuHashMapKVCacheTest {
    * 这两个 getter 以前由 Lombok 生成、直接返回活对象，调用方一次 {@code set} / {@code delete}
    * 就能把账本改坏（账本与数据层分叉、活数据被提前淘汰），而且不报任何错。
    * 现在返回只读外壳：读实时转发到活账本，写立刻抛
-   * {@link UnsupportedOperationException}。
+   * {@code CacheUnsupportedOperationException}。
    * <p>
    * {@code computeIfAbsent} 是<b>被覆盖成一律抛</b>的，不靠"默认实现的写动作最终会落到
    * 被禁掉的 set 上"：默认实现只在 key 不存在时才写入，命中时它读到一个值就直接返回 ——
@@ -401,7 +401,8 @@ public class LfuHashMapKVCacheTest {
     CacheAssertions.assertNotSupported("计数表 set", () -> counts.set("a", 99L));
     CacheAssertions.assertNotSupported("计数表 delete", () -> counts.delete("a"));
     CacheAssertions.assertNotSupported("计数表 remove", () -> counts.remove("a"));
-    // remove 已覆盖成无条件抛：不校验参数，null key 也是 UOE（与 delete 同口径）
+    // remove 已覆盖成无条件抛：不校验参数，null key 也抛 CacheUnsupportedOperationException
+    // （与 delete 同口径）
     CacheAssertions.assertNotSupported("计数表 remove(null)", () -> counts.remove(null));
     // computeIfAbsent 被覆盖成一律抛：默认实现只在"key 不存在"时才写入，
     // 命中时会直接返回读到的值（见 ReadOnlyKVCache 的说明），同一个方法两种行为

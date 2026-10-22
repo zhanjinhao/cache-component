@@ -73,7 +73,7 @@ public class ExpiredConcurrentHashMapKVCacheTest {
    * <p>
    * 两个重载都是如此，{@code ExpiredHashMapKVCache} 的行为与之一致。
    * <p>
-   * 这条测不到四个基于 redis 的实现：它们直接抛 {@link UnsupportedOperationException}。
+   * 这条测不到四个基于 redis 的实现：它们直接抛 {@code CacheUnsupportedOperationException}。
    * 各实现在过期条目上的完整口径（含 {@code containsKey} / {@code remove} /
    * 不带 TTL 的 {@code setnx} 这三点）由
    * {@code ExpiredKVCacheContractTest#testExpiredEntrySemanticsAcrossImpls} 统一钉住 ——

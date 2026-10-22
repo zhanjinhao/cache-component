@@ -11,7 +11,7 @@ import java.util.function.Function;
  * <p>
  * <b>继承的规则</b>：{@link ExpiredKVCache} 的全部约定 —— 过期的 key 等同于没有值、
  * TTL 换算走 {@link ExpiredKVCache#ttlMillis}、value 为 null 时 {@code set} 按删除处理而
- * {@code setnx} 不写入、key 为 null 抛 {@link IllegalArgumentException}。
+ * {@code setnx} 不写入、key 为 null 抛 {@link CacheIllegalArgumentException}。
  * <p>
  * <b>自身差异</b>：
  * <ul>
@@ -46,10 +46,10 @@ public class RedissonRedisKVCache implements ExpiredKVCache<String, String> {
     // 参见 KVCache#set：写入 null 一律视为删除。
     // redisson 的 bucket.set(null) 恰好也是删除，但此处显式写出删除操作，不依赖该实现细节。
     if (value == null) {
-      bucket.delete();
+      RedisCall.run(RedisCall.command("DEL", key), bucket::delete);
       return;
     }
-    bucket.set(value);
+    RedisCall.run(RedisCall.command("SET", key, value), () -> bucket.set(value));
   }
 
   @Override
@@ -57,13 +57,13 @@ public class RedissonRedisKVCache implements ExpiredKVCache<String, String> {
     KVCache.assertKeyNotNull(key);
     RBucket<Object> bucket = redissonClient.getBucket(key);
     if (value == null) {
-      bucket.delete();
+      RedisCall.run(RedisCall.command("DEL", key), bucket::delete);
       return;
     }
     // TTL 换算统一走 ExpiredKVCache.ttlMillis：redisson 自己不做校验，
     // 非正 timeout 若原样下发会被服务端以 "ERR invalid expire time" 打回来。
     long ttlMillis = ExpiredKVCache.ttlMillis(timeout, unit);
-    RedisInvalidExpireTime.run("set(key, value, timeout, unit)", ttlMillis,
+    RedisCall.runWithTtl(RedisCall.command("PSETEX", key, ttlMillis), ttlMillis,
             () -> bucket.set(value, ttlMillis, TimeUnit.MILLISECONDS));
   }
 
@@ -75,7 +75,8 @@ public class RedissonRedisKVCache implements ExpiredKVCache<String, String> {
       return false;
     }
     // RBucket.trySet 等价于 SETNX。
-    return redissonClient.getBucket(key).trySet(value);
+    return RedisCall.call(RedisCall.command("SET", key, value, "NX"),
+            () -> redissonClient.getBucket(key).trySet(value));
   }
 
   @Override
@@ -85,7 +86,7 @@ public class RedissonRedisKVCache implements ExpiredKVCache<String, String> {
       return false;
     }
     long ttlMillis = ExpiredKVCache.ttlMillis(timeout, unit);
-    return RedisInvalidExpireTime.call("setnx(key, value, timeout, unit)", ttlMillis,
+    return RedisCall.callWithTtl(RedisCall.command("SET", key, value, "NX", "PX", ttlMillis), ttlMillis,
             () -> redissonClient.getBucket(key).trySet(value, ttlMillis, TimeUnit.MILLISECONDS));
   }
 
@@ -93,21 +94,21 @@ public class RedissonRedisKVCache implements ExpiredKVCache<String, String> {
   public boolean containsKey(String key) {
     KVCache.assertKeyNotNull(key);
     RBucket<Object> bucket = redissonClient.getBucket(key);
-    return bucket.get() != null;
+    return RedisCall.call(RedisCall.command("GET", key), bucket::get) != null;
   }
 
   @Override
   public String get(String key) {
     KVCache.assertKeyNotNull(key);
     RBucket<String> bucket = redissonClient.getBucket(key);
-    return bucket.get();
+    return RedisCall.call(RedisCall.command("GET", key), bucket::get);
   }
 
   @Override
   public boolean delete(String key) {
     KVCache.assertKeyNotNull(key);
     RBucket<String> bucket = redissonClient.getBucket(key);
-    return bucket.delete();
+    return RedisCall.call(RedisCall.command("DEL", key), bucket::delete);
   }
 
   /**
@@ -117,53 +118,54 @@ public class RedissonRedisKVCache implements ExpiredKVCache<String, String> {
    * 与另外三个 redis 实现不同，<b>本方法不要求服务端 Redis ≥ 6.2</b>：客户端把取值与删除
    * 合成一段服务端脚本下发，由服务端整体执行，旧版本也能用。
    * <p>
-   * 服务端拒绝该命令时，{@link RedisUnknownCommand} 会把客户端异常统一翻译成
-   * {@link UnsupportedOperationException}。
+   * 服务端拒绝该命令时，{@link RedisCall} 会把客户端异常统一翻译成
+   * {@link CacheUnsupportedOperationException}。
    *
-   * @throws UnsupportedOperationException 服务端不认识本方法下发的命令时
+   * @throws CacheUnsupportedOperationException 服务端不认识本方法下发的命令时
    */
   @Override
   public String remove(String key) {
     KVCache.assertKeyNotNull(key);
     RBucket<String> bucket = redissonClient.getBucket(key);
-    return RedisUnknownCommand.call("GETDEL", bucket::getAndDelete);
+    // context 用 redis 命令名而不是客户端 API 名：翻译出来的消息说的是"服务端不支持哪个命令"
+    return RedisCall.call(RedisCall.command("GETDEL", key), bucket::getAndDelete);
   }
 
   /**
    * <b>不提供</b>，与 {@link LettuceRedisKVCache} 同，
    * 见 {@link LettuceRedisKVCache#computeIfAbsent(String, Function)} 的说明。
    *
-   * @throws UnsupportedOperationException 一律抛出
+   * @throws CacheUnsupportedOperationException 一律抛出
    */
   @Override
   public String computeIfAbsent(String key, Function<? super String, ? extends String> mappingFunction) {
-    throw new UnsupportedOperationException(
-            "redis 实现不支持 computeIfAbsent：它不是原子的复合操作，并发下会重复计算并互相覆盖。"
-                    + "需要该语义时用 CacheHelper#queryWithPpf（内部加锁）。");
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support computeIfAbsent.");
   }
 
   @Override
   public String computeIfAbsent(String key, Function<? super String, ? extends String> mappingFunction,
                                 long timeout, TimeUnit unit) {
-    throw new UnsupportedOperationException(
-            "redis 实现不支持 computeIfAbsent：它不是原子的复合操作，并发下会重复计算并互相覆盖。"
-                    + "需要该语义时用 CacheHelper#queryWithPpf（内部加锁）。");
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support computeIfAbsent.");
   }
 
   @Override
   public int size() {
-    throw new UnsupportedOperationException();
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support size(): the server has no per-instance entry-count metric.");
   }
 
   /**
    * <b>不提供</b>，理由见 {@link LettuceRedisKVCache#capacity()}。
    *
-   * @throws UnsupportedOperationException 一律抛出
+   * @throws CacheUnsupportedOperationException 一律抛出
    */
   @Override
   public int capacity() {
-    throw new UnsupportedOperationException(
-            "redis 实现不支持 capacity()：容量由服务端的 maxmemory-policy 全局决定，与单个 KVCache 实例无关。");
+    throw new CacheUnsupportedOperationException(
+            "The redis implementation does not support capacity(): capacity is determined globally by the"
+                    + " server's maxmemory-policy and is unrelated to a single KVCache instance.");
   }
 
 }

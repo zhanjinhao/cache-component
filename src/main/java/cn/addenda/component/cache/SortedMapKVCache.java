@@ -32,7 +32,7 @@ public abstract class SortedMapKVCache<K, V> implements SortedKVCache<K, V> {
    */
   protected SortedMapKVCache(SortedMap<K, V> sortedMap) {
     if (sortedMap == null) {
-      throw new IllegalArgumentException("sortedMap 不允许为 null!");
+      throw new CacheIllegalArgumentException("sortedMap must not be null!");
     }
     this.sortedMap = sortedMap;
   }

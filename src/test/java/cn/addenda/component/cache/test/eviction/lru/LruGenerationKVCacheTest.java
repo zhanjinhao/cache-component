@@ -382,7 +382,7 @@ public class LruGenerationKVCacheTest {
     c.set("a", "1");
     Assert.assertTrue("老年代里的 key 删掉要返回 true", c.delete("a"));
     Assert.assertFalse("再删一次返回 false", c.delete("a"));
-    Assert.assertFalse("压根没有的 key 返回 false", c.delete("never-existed"));
+    Assert.assertFalse("根本没有的 key 返回 false", c.delete("never-existed"));
 
     // 提升到年轻代之后同样要返回 true
     c.set("b", "2");
@@ -483,7 +483,7 @@ public class LruGenerationKVCacheTest {
   }
 
   /**
-   * 对照组：报表数据自己也不该把年轻代占满 —— 它压根没进去过。
+   * 对照组：报表数据自己也不该把年轻代占满 —— 它根本没进去过。
    */
   @Test
   public void testReportDataStaysInOldGeneration() {

@@ -50,7 +50,7 @@ public abstract class ExpiredConcurrentMapKVCache<K, V> implements ExpiredKVCach
 
   protected ExpiredConcurrentMapKVCache(ConcurrentMap<K, Binary<V, Long>> map) {
     if (map == null) {
-      throw new IllegalArgumentException("map is null!");
+      throw new CacheIllegalArgumentException("map must not be null!");
     }
     this.map = map;
   }

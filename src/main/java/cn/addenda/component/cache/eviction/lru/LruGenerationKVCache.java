@@ -1,5 +1,7 @@
 package cn.addenda.component.cache.eviction.lru;
 
+import cn.addenda.component.base.string.Slf4jUtils;
+import cn.addenda.component.cache.CacheIllegalArgumentException;
 import cn.addenda.component.cache.KVCache;
 import lombok.*;
 
@@ -101,10 +103,10 @@ public abstract class LruGenerationKVCache<K, V> extends LruKVCache<K, V> {
   private static void assertCapacitySum(int newCapacity, LruKVCache<?, ?> oldGenerationKVCache) {
     int oldCapacity = oldGenerationKVCache.capacity();
     if ((long) newCapacity + oldCapacity > KVCache.UNLIMITED_CAPACITY) {
-      throw new IllegalArgumentException(
-              "两代容量之和不允许超过 " + KVCache.UNLIMITED_CAPACITY
-                      + "（KVCache.UNLIMITED_CAPACITY）：newCapacity=[" + newCapacity
-                      + "]，oldCapacity=[" + oldCapacity + "]。");
+      throw new CacheIllegalArgumentException(Slf4jUtils.format(
+              "The sum of the two generation's capacities must not exceed {}"
+                      + " (KVCache.UNLIMITED_CAPACITY): newCapacity=[{}], oldCapacity=[{}].",
+              KVCache.UNLIMITED_CAPACITY, newCapacity, oldCapacity));
     }
   }
 
@@ -117,9 +119,10 @@ public abstract class LruGenerationKVCache<K, V> extends LruKVCache<K, V> {
    */
   private static void assertThreshold(int threshold) {
     if (threshold < 0) {
-      throw new IllegalArgumentException(
-              "threshold(观察期) 需要 >= 0；当前值：" + threshold
-                      + "。0 表示\"任何一次读取都视为合格（含同一毫秒）\"；要关闭提升请用一个极大的正数。");
+      throw new CacheIllegalArgumentException(Slf4jUtils.format(
+              "threshold (observation period) must be >= 0; current value: {}."
+                      + " 0 means every read qualifies (including same-millisecond reads);"
+                      + " use a very large positive value to disable promotion.", threshold));
     }
   }
 
@@ -171,7 +174,7 @@ public abstract class LruGenerationKVCache<K, V> extends LruKVCache<K, V> {
    * 年轻代未命中，转查老年代：
    * <ul>
    *   <li>老年代也不存在：返回 null；</li>
-   *   <li>存在，且 {@code 入队至今 &gt;= threshold}：已达到观察期，提升到年轻代
+   *   <li>存在，且 {@code 入队至今 >= threshold}：已达到观察期，提升到年轻代
    *       （从老年代移除，写入年轻代）；</li>
    *   <li>存在，但仍在观察期内：<b>不执行任何操作</b>。既不提升，也不修改
    *       {@link Entry#enterTm}，因此窗口不会被本次访问推后。</li>

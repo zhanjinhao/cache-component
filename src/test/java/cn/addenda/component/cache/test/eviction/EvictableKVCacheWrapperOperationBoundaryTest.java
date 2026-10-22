@@ -56,7 +56,8 @@ public class EvictableKVCacheWrapperOperationBoundaryTest {
   }
 
   /**
-   * 去掉 {@link LruKKVCache} —— 它明确不支持 {@code setnx}（抛 UOE），
+   * 去掉 {@link LruKKVCache} —— 它明确不支持 {@code setnx}
+   * （抛 {@code CacheUnsupportedOperationException}），
    * 不能混在"setnx 通用契约"里跑。理由见它自己的方法说明：
    * LRU-K 的写入要过准入闸门，而 {@code setnx} 承诺"不存在就写、写了就有"。
    */
@@ -78,7 +79,7 @@ public class EvictableKVCacheWrapperOperationBoundaryTest {
 
   /**
    * 单独钉住 {@link LruKKVCache} 的这条：{@code setnx} 抛
-   * {@link UnsupportedOperationException}，而不是返回一个需要猜的 false。
+   * {@code CacheUnsupportedOperationException}，而不是返回一个需要猜的 false。
    * <p>
    * 具体行为（各门槛、key 在不在）在 {@code LruKKVCacheTest} 里。
    */
@@ -89,8 +90,8 @@ public class EvictableKVCacheWrapperOperationBoundaryTest {
   }
 
   /**
-   * 同理钉住 {@code computeIfAbsent}：抛 {@link UnsupportedOperationException}，
-   * 而不是返回一个"可能压根没进缓存"的值。
+   * 同理钉住 {@code computeIfAbsent}：抛 {@code CacheUnsupportedOperationException}，
+   * 而不是返回一个"可能根本没进缓存"的值。
    * <p>
    * 这里用的是 {@code threshold = 1}（值确实会落地）也照样抛 —— 与 {@code setnx} 同一个理由：
    * 不应让同一方法的行为随一个调优参数在"可用"与"抛异常"之间切换。
@@ -165,7 +166,8 @@ public class EvictableKVCacheWrapperOperationBoundaryTest {
    * 那一半由 {@code EvictableKVCacheWrapperConsistencyTest#testSetnxNullDoesNotTouchTheLedger}
    * 直接读队列 / 计数表来钉。
    * <p>
-   * {@link LruKKVCache} 不在这组里 —— 它整个 {@code setnx} 都不支持，抛 UOE，
+   * {@link LruKKVCache} 不在这组里 —— 它整个 {@code setnx} 都不支持，
+   * 抛 {@code CacheUnsupportedOperationException}，
    * 所以"null 时返回 false"那条契约在它身上不适用。见
    * {@link #testSetnxIsUnsupportedOnLruKKVCache()}。
    */

@@ -1,6 +1,7 @@
 package cn.addenda.component.cache.test;
 
 import cn.addenda.component.base.util.SleepUtils;
+import cn.addenda.component.cache.CacheUnsupportedOperationException;
 import cn.addenda.component.cache.ConcurrentHashMapKVCache;
 import cn.addenda.component.cache.ExpiredConcurrentHashMapKVCache;
 import cn.addenda.component.cache.ExpiredHashMapKVCache;
@@ -46,7 +47,7 @@ import java.util.function.Function;
  * 逐个验证它们对得起这个声明。
  * <p>
  * 要钉的是同一条规则（见 {@link KVCache} 的 L2 层）：<b>原子性不可部分承诺</b> ——
- * 复合操作要么做成原子的，要么<b>明确拒绝</b>（抛 {@link UnsupportedOperationException}），
+ * 复合操作要么做成原子的，要么<b>明确拒绝</b>（抛 {@link CacheUnsupportedOperationException}），
  * 不允许悄悄退回接口默认实现。默认实现由 get 与写两步组成，多线程可以同时通过"检查"环节，
  * 而且<b>从签名上完全看不出来</b>：调用方以为拿到了原子操作，实际拿到的是竞态。
  * <p>
@@ -64,7 +65,7 @@ import java.util.function.Function;
  *       <b>结构性</b>：两个复合默认方法由实现自己声明，不许直接用接口默认实现；</li>
  *   <li>{@link #testComputeIfAbsentIsAtomicOrRefused()}、{@link #testSetnxIsAtomicOrRefused()}、
  *       {@link #testTtlComputeIfAbsentIsAtomicOrRefused()}、{@link #testTtlSetnxIsAtomicOrRefused()}
- *       —— <b>行为性</b>：并发下要么只算一次 / 只成功一次，要么当初就抛 UOE。
+ *       —— <b>行为性</b>：并发下要么只算一次 / 只成功一次，要么当初就明确拒绝。
  *       这条不依赖"实现有没有覆盖"，只认最终行为。后两条是带 TTL 的重载，
  *       只跑表里带 TTL 的实现（{@code instanceof ExpiredKVCache}），其余跳过。</li>
  * </ol>
@@ -216,14 +217,14 @@ public class L2ContractMatrixTest {
     Assert.assertFalse(name + " 的 " + methodName + " 直接用了接口默认实现（声明类 "
                     + declaringClass.getSimpleName() + "）。"
                     + "接口默认实现由 get 与写两步组成、达不到 L2 —— "
-                    + "做不到原子的就明确拒绝（抛 UnsupportedOperationException），不要静默降级",
+                    + "做不到原子的就明确拒绝（抛 CacheUnsupportedOperationException），不要静默降级",
             declaringClass == KVCache.class || declaringClass == ExpiredKVCache.class);
   }
 
   /**
    * <b>行为性：{@code computeIfAbsent} 要么原子、要么明确拒绝。</b>
    * <p>
-   * 不预设实现有没有覆盖它：先探一次，抛 {@link UnsupportedOperationException} 的就是"明确拒绝"，
+   * 不预设实现有没有覆盖它：先探一次，抛 {@link CacheUnsupportedOperationException} 的就是"明确拒绝"，
    * 合法（四个 redis 实现即如此）；不抛的就必须扛住并发 —— 8 个线程同时打同一个 key，
    * {@code mappingFunction} 只能被调用一次。默认实现那条"先 get 再 set"的路径会被调用多次，
    * 这是已有用例（{@code ExpiredKVCacheContractTest#testComputeIfAbsentIsNotAtomicUnderConcurrency}）
@@ -238,7 +239,7 @@ public class L2ContractMatrixTest {
       String probeKey = uniqueKey(name);
       try {
         cache.computeIfAbsent(probeKey, k -> "probe");
-      } catch (UnsupportedOperationException refused) {
+      } catch (CacheUnsupportedOperationException refused) {
         log.info("{} 明确拒绝了 computeIfAbsent（L2 允许，做不到就拒绝）", name);
         continue;
       } finally {
@@ -272,7 +273,7 @@ public class L2ContractMatrixTest {
       String probeKey = uniqueKey(name);
       try {
         cache.setnx(probeKey, "probe");
-      } catch (UnsupportedOperationException refused) {
+      } catch (CacheUnsupportedOperationException refused) {
         log.info("{} 明确拒绝了 setnx（L2 允许，做不到就拒绝）", name);
         continue;
       } finally {
@@ -306,7 +307,7 @@ public class L2ContractMatrixTest {
       String probeKey = uniqueKey(name);
       try {
         cache.computeIfAbsent(probeKey, k -> "probe", 1, TimeUnit.MINUTES);
-      } catch (UnsupportedOperationException refused) {
+      } catch (CacheUnsupportedOperationException refused) {
         log.info("{} 明确拒绝了带 TTL 的 computeIfAbsent（L2 允许，做不到就拒绝）", name);
         continue;
       } finally {
@@ -342,7 +343,7 @@ public class L2ContractMatrixTest {
       String probeKey = uniqueKey(name);
       try {
         cache.setnx(probeKey, "probe", 1, TimeUnit.MINUTES);
-      } catch (UnsupportedOperationException refused) {
+      } catch (CacheUnsupportedOperationException refused) {
         log.info("{} 明确拒绝了带 TTL 的 setnx（L2 允许，做不到就拒绝）", name);
         continue;
       } finally {

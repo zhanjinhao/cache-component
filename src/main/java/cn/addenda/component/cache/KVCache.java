@@ -22,7 +22,7 @@ import java.util.function.Function;
  *       {@link #computeIfAbsent(Object, Function)}，也整体作为原子。
  * <p>
  *       <b>不可部分承诺</b>：做不到原子的方法必须明确拒绝（抛
- *       {@link UnsupportedOperationException}），不能拿一个非原子的版本顶上 ——
+ *       {@link CacheUnsupportedOperationException}），不能拿一个非原子的版本顶上 ——
  *       调用方从签名上分辨不出哪一半可以依赖。这两个方法的<b>默认实现不属于本层</b>
  *       （它们由 get 与写两步组成）；实现要么覆盖成原子版本，要么拒绝。
  *       也可以由上层加锁补足，见 {@code CacheHelper}。</li>
@@ -30,24 +30,37 @@ import java.util.function.Function;
  * </ul>
  * <h3>入参误用的异常口径</h3>
  * 同一个错误在不同方法上必须报同一种异常，否则调用方没法写出统一的兜底处理。
+ * <b>本组件对外抛出的"拒绝"一律使用 {@link CacheException} 的子类</b>，不使用 JDK 的
+ * {@code UnsupportedOperationException} / {@code IllegalArgumentException} —— 那两类太通用，
+ * 业务系统配全局异常处理器时分辨不出来源（唯一例外是下面第 3 条的
+ * {@link NullPointerException}）。两类拒绝对应两个类型：
+ * <ul>
+ *   <li><b>操作不可用</b>（实现或服务端做不到）→ {@link CacheUnsupportedOperationException}；</li>
+ *   <li><b>参数不被组件允许穿透到存储层</b>（null key、容量/阈值越界等）→
+ *       {@link CacheIllegalArgumentException}。</li>
+ * </ul>
  * 多个错误同时存在时，按下列优先级判定：
  * <ol>
- *   <li><b>实现不支持该操作</b> → {@link UnsupportedOperationException}，且<b>不校验参数</b>：
+ *   <li><b>实现不支持该操作</b> → {@link CacheUnsupportedOperationException}，且<b>不校验参数</b>：
  *       操作整体不可用时，"null 该怎么处理"不再适用。包括 {@code LruKKVCache} 的
  *       {@code setnx} / {@code computeIfAbsent}、四个 redis 实现的 {@code computeIfAbsent}、
  *       只读外壳的写方法。</li>
- *   <li><b>{@code key} 为 null</b> → {@link IllegalArgumentException}。key 为 null 是本接口对
+ *   <li><b>{@code key} 为 null</b> → {@link CacheIllegalArgumentException}。key 为 null 是本接口对
  *       所有方法一致约定的调用方错误，因此<b>两个参数都为 null 时也报 key</b>，而不是换成
  *       别的异常。</li>
  *   <li><b>{@code mappingFunction} 为 null</b> → {@link NullPointerException}。
  *       只有 key 合法时才轮得到这一条。</li>
  * </ol>
+ * <b>拦截点由实现决定，异常类型不变</b>：入参不合法时，实现可以在入口直接校验，也可以把参数
+ * 下发给存储层、再把存储层的拒绝归一成 {@link CacheIllegalArgumentException}（redis 的超大 TTL
+ * 即如此）。调用方只认类型，不需要关心是哪一种 —— 它表达的都是"组件不允许该参数穿透到存储层"。
  * <b>唯一不适用第 1 条的是"条件性不支持"</b>：实现本身提供该方法，只是当前环境做不到 ——
  * 例如四个 redis 实现的 {@code remove} 依赖 {@code GETDEL}，服务端版本不够时抛
- * {@link UnsupportedOperationException}。这类仍按常规顺序<b>先校验 key</b>：
+ * {@link CacheUnsupportedOperationException}。这类仍按常规顺序<b>先校验 key</b>：
  * 参数错误与能力缺失同时存在时，报参数错误。
  * <p>
- * 序列化类型不支持由 {@code CacheHelper} 层报 {@code CacheException}，不在本接口范围内。
+ * redis 调用中的网络 / 超时故障统一抛 {@link CacheNetworkException}；
+ * 序列化类型不支持由 {@code CacheHelper} 层报 {@code CacheHelperException}，不在本接口范围内。
  *
  * @author addenda
  * @since 2023/05/30
@@ -86,7 +99,7 @@ public interface KVCache<K, V> {
    *
    * @param k key，不允许为 null
    * @param v value，为 null 时等价于 {@link #delete(Object)}
-   * @throws IllegalArgumentException k 为 null 时
+   * @throws CacheIllegalArgumentException k 为 null 时
    */
   void set(K k, V v);
 
@@ -100,7 +113,7 @@ public interface KVCache<K, V> {
    * @param k key，不允许为 null
    * @param v value，为 null 时不写入并返回 false
    * @return 写入成功返回 true；key 已存在、或 v 为 null 时返回 false
-   * @throws IllegalArgumentException k 为 null 时
+   * @throws CacheIllegalArgumentException k 为 null 时
    */
   boolean setnx(K k, V v);
 
@@ -125,7 +138,7 @@ public interface KVCache<K, V> {
    * 不是每个实现都答得上来 —— 参考子类 {@code LettuceRedisKVCache}（拒绝）、
    * {@code EvictableKVCacheWrapper}（淘汰族的口径）。
    *
-   * @throws UnsupportedOperationException 实现不支持时
+   * @throws CacheUnsupportedOperationException 实现不支持时
    */
   int size();
 
@@ -136,7 +149,7 @@ public interface KVCache<K, V> {
    * {@code EvictableKVCacheWrapper}（由构造参数决定）。<b>不限制条数的实现统一返回
    * {@link #UNLIMITED_CAPACITY} 哨兵</b>，它们不会因为"到了这个数"而丢弃任何数据。
    *
-   * @throws UnsupportedOperationException 实现不支持时
+   * @throws CacheUnsupportedOperationException 实现不支持时
    */
   int capacity();
 
@@ -148,8 +161,8 @@ public interface KVCache<K, V> {
    * {@code LettuceRedisKVCache}（{@code GETDEL}，要求服务端 Redis ≥ 6.2）。
    *
    * @param k key，不允许为 null
-   * @throws IllegalArgumentException      k 为 null 时
-   * @throws UnsupportedOperationException 服务端或实现不支持时
+   * @throws CacheIllegalArgumentException      k 为 null 时
+   * @throws CacheUnsupportedOperationException 服务端或实现不支持时
    */
   default V remove(K k) {
     // 先拦 null：本方法有两个下游调用，报错要发生在动作开始之前
@@ -172,9 +185,9 @@ public interface KVCache<K, V> {
    *
    * @param key             key，不允许为 null
    * @param mappingFunction 不存在时的取值函数，不允许为 null；<b>不得操作本 cache</b>
-   * @throws IllegalArgumentException      key 为 null 时
-   * @throws NullPointerException          mappingFunction 为 null 时
-   * @throws UnsupportedOperationException 实现不支持时（此时不校验参数）
+   * @throws CacheIllegalArgumentException      key 为 null 时
+   * @throws NullPointerException               mappingFunction 为 null 时
+   * @throws CacheUnsupportedOperationException 实现不支持时（此时不校验参数）
    */
   default V computeIfAbsent(K key,
                             Function<? super K, ? extends V> mappingFunction) {
@@ -200,11 +213,11 @@ public interface KVCache<K, V> {
    * 一条缓存，各底层存储的处理也不一致。
    *
    * @param k key
-   * @throws IllegalArgumentException k 为 null 时
+   * @throws CacheIllegalArgumentException k 为 null 时
    */
   static void assertKeyNotNull(Object k) {
     if (k == null) {
-      throw new IllegalArgumentException("key 不允许为 null");
+      throw new CacheIllegalArgumentException("key must not be null");
     }
   }
 

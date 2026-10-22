@@ -1,5 +1,8 @@
 package cn.addenda.component.cache.eviction;
 
+import cn.addenda.component.base.string.Slf4jUtils;
+import cn.addenda.component.cache.CacheIllegalArgumentException;
+import cn.addenda.component.cache.CacheUnsupportedOperationException;
 import cn.addenda.component.cache.KVCache;
 import cn.addenda.component.cache.KVCacheWrapper;
 import cn.addenda.component.cache.eviction.lfu.LfuLruKVCache;
@@ -61,12 +64,12 @@ public abstract class EvictableKVCacheWrapper<K, V> extends KVCacheWrapper<K, V>
     // 值（两代之和、账本的两倍）不是构造参数，各自在自己的实现里判。
     // 本层额外收紧了 0：容量 N 的含义是"最多留 N 条"，0 会让淘汰逻辑失去意义。
     if (capacity <= 0) {
-      throw new IllegalArgumentException("缓存的大小需要 > 0！");
+      throw new CacheIllegalArgumentException("Cache capacity must be > 0.");
     }
     if (capacity > KVCache.UNLIMITED_CAPACITY) {
-      throw new IllegalArgumentException(
-              "缓存的大小不允许超过 " + KVCache.UNLIMITED_CAPACITY
-                      + "（KVCache.UNLIMITED_CAPACITY）；当前值：[" + capacity + "]。");
+      throw new CacheIllegalArgumentException(Slf4jUtils.format(
+              "Cache capacity must not exceed {} (KVCache.UNLIMITED_CAPACITY); current value: [{}].",
+              KVCache.UNLIMITED_CAPACITY, capacity));
     }
     this.capacity = capacity;
   }
@@ -120,7 +123,7 @@ public abstract class EvictableKVCacheWrapper<K, V> extends KVCacheWrapper<K, V>
    * <p>
    * 本层没有"写入不落地"的实现，因此上面的兜底判断恒为 true；保留它是为了将来出现
    * "写入不落地"的实现时不至于静默返回错误结果。真正"写入不落地"的实现会自行覆盖
-   * {@code setnx}：如 {@link LruKKVCache} 明确抛 {@link UnsupportedOperationException}
+   * {@code setnx}：如 {@link LruKKVCache} 明确抛 {@link CacheUnsupportedOperationException}
    * 而非返回一个含义歧义的 false，原因见其类说明。
    * <p>
    * 与底层 Cache 的 {@code setnx} 不同，本方法不保证并发原子性：淘汰策略的统计结构与

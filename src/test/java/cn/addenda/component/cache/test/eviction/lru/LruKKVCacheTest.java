@@ -238,14 +238,14 @@ public class LruKKVCacheTest {
   }
 
   /**
-   * <b>{@code setnx} 明确不支持，一律抛 {@link UnsupportedOperationException}。</b>
+   * <b>{@code setnx} 明确不支持，一律抛 {@code CacheUnsupportedOperationException}。</b>
    * <p>
    * LRU-K 的写入要过准入闸门（攒够 {@code threshold} 次访问才落地），
    * 而 {@code setnx} 的语义是"不存在就写、写了就有"，两者直接对撞。
    * 门槛 >= 2 时它本来会恒返回 false，调用方分不清是"已存在"还是"没落地"，
    * 拿它做互斥会永远抢不到还不报错 —— 与其这样，不如明确说不支持。
    * <p>
-   * 参数不校验：整个操作都不支持，null key 同样抛 {@link UnsupportedOperationException}
+   * 参数不校验：整个操作都不支持，null key 同样抛 {@code CacheUnsupportedOperationException}
    * （见 {@code KVCache} 的异常口径第 1 条）。
    */
   @Test
@@ -257,7 +257,7 @@ public class LruKKVCacheTest {
     CacheAssertions.assertNotSupported("LruKKVCache: setnx(threshold=1)",
             () -> new LruKHashMapKVCache<String, String>(CAPACITY, 1).setnx("a", "v"));
 
-    // 参数不校验：整个操作都不支持，null key 也抛 UOE
+    // 参数不校验：整个操作都不支持，null key 也抛 CacheUnsupportedOperationException
     CacheAssertions.assertNotSupported("LruKKVCache: setnx(null, v)",
             () -> new LruKHashMapKVCache<String, String>(CAPACITY, 2).setnx(null, "v"));
   }
@@ -438,7 +438,7 @@ public class LruKKVCacheTest {
     CacheAssertions.assertNotSupported("threshold=1 时同样不支持",
             () -> thresholdOne.computeIfAbsent("k", k -> "v"));
 
-    // 参数不校验：null key 同样抛 UOE（与 setnx 同口径）
+    // 参数不校验：null key 同样抛 CacheUnsupportedOperationException（与 setnx 同口径）
     CacheAssertions.assertNotSupported("computeIfAbsent(null, fn)",
             () -> cache.computeIfAbsent(null, k -> "v"));
   }
@@ -449,9 +449,9 @@ public class LruKKVCacheTest {
    * {@code KVCache.UNLIMITED_CAPACITY} 是所有 cache 都要遵守的容量上限
    * （见其说明：合法性判断一律以它为准）；本类的访问计数账本是一个<b>独立的 cache 实例</b>、
    * 容量取主缓存的两倍，于是主缓存的容量被间接限制在上限的一半以内 ——
-   * 不是"乘 2 不溢出就行"。抛 {@link IllegalArgumentException} 而不是
+   * 不是"乘 2 不溢出就行"。抛 {@code CacheIllegalArgumentException} 而不是
    * {@link ArithmeticException}（{@code Math.multiplyExact} 那种）：这是"调用方给的参数
-   * 不合法"，本组件里同类问题一律 IAE；消息也会说清是"乘 2 才超的"，
+   * 不合法"，本组件里同类问题一律用 CacheIllegalArgumentException；消息也会说清是"乘 2 才超的"，
    * 而不是回绕成负数后被容量校验报成"缓存的大小需要 &gt; 0"。
    * <p>
    * "主缓存自己不合法"那一侧在取 {@code int} 上界时写不出来，这里<b>临时把上限调低</b>

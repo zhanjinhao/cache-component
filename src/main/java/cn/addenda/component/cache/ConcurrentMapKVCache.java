@@ -35,7 +35,7 @@ public abstract class ConcurrentMapKVCache<K, V> implements KVCache<K, V> {
 
   protected ConcurrentMapKVCache(ConcurrentMap<K, V> map) {
     if (map == null) {
-      throw new IllegalArgumentException("map is null!");
+      throw new CacheIllegalArgumentException("map must not be null!");
     }
     this.map = map;
   }

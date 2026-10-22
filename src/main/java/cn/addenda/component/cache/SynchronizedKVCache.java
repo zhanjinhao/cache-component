@@ -8,7 +8,7 @@ import java.util.function.Function;
  * <p>
  * <b>继承的规则</b>：从 {@link KVCacheWrapper} 继承"数据只在 delegate 里、本类不复制存储"
  * 这一分工 —— 所有读写都落到 delegate，本类唯一自己的状态是这把锁；
- * {@link KVCache} 的语义（null key 报 {@link IllegalArgumentException}、null value 按删除、
+ * {@link KVCache} 的语义（null key 报 {@link CacheIllegalArgumentException}、null value 按删除、
  * {@link #setnx(Object, Object)} 的四种输入组合等）由 delegate 决定，本类<b>不改写也不补齐</b>，
  * 只原样转交。
  * <p>

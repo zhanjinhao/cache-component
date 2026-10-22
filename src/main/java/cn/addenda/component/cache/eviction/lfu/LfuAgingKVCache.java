@@ -1,5 +1,6 @@
 package cn.addenda.component.cache.eviction.lfu;
 
+import cn.addenda.component.cache.CacheIllegalArgumentException;
 import cn.addenda.component.cache.KVCache;
 import cn.addenda.component.cache.SortedKVCache;
 import lombok.Getter;
@@ -77,10 +78,10 @@ public abstract class LfuAgingKVCache<K, V> extends LfuKVCache<K, V> {
 
   private static void assertAgingArgs(long agingInterval, double decayRatio) {
     if (agingInterval <= 0L) {
-      throw new IllegalArgumentException("agingInterval 需要 > 0！");
+      throw new CacheIllegalArgumentException("agingInterval must be > 0.");
     }
     if (decayRatio < 0D || decayRatio > 1D) {
-      throw new IllegalArgumentException("decayRatio 需要落在 [0, 1] 内！");
+      throw new CacheIllegalArgumentException("decayRatio must be within [0, 1].");
     }
   }
 

@@ -1,5 +1,8 @@
 package cn.addenda.component.cache.eviction.lru;
 
+import cn.addenda.component.base.string.Slf4jUtils;
+import cn.addenda.component.cache.CacheIllegalArgumentException;
+import cn.addenda.component.cache.CacheUnsupportedOperationException;
 import cn.addenda.component.cache.KVCache;
 
 import java.util.function.Function;
@@ -116,9 +119,9 @@ public abstract class LruKKVCache<K, V> extends LruKVCache<K, V> {
    */
   private static void assertThreshold(int threshold) {
     if (threshold < 1) {
-      throw new IllegalArgumentException(
-              "threshold 需要 >= 1（准入资格是\"攒够几次访问\"，计数从第一份凭证起即为 1）；当前值："
-                      + threshold + "。");
+      throw new CacheIllegalArgumentException(Slf4jUtils.format(
+              "threshold must be >= 1 (admission requires enough accesses, and the counter starts at 1"
+                      + " with the first ticket); current value: {}.", threshold));
     }
   }
 
@@ -198,7 +201,7 @@ public abstract class LruKKVCache<K, V> extends LruKVCache<K, V> {
   }
 
   /**
-   * <b>不支持，一律抛出 {@link UnsupportedOperationException}。</b>
+   * <b>不支持，一律抛出 {@link CacheUnsupportedOperationException}。</b>
    * <p>
    * LRU-K 的写入需要经过准入闸门，与 {@code setnx}"不存在则写入、写入后即可读取"的语义直接
    * 冲突：门槛大于等于 2 时恒返回 false（key 已存在则入口直接返回 false；不存在则 {@code set}
@@ -211,33 +214,43 @@ public abstract class LruKKVCache<K, V> extends LruKVCache<K, V> {
    */
   @Override
   public boolean setnx(K k, V v) {
-    throw new UnsupportedOperationException(
-            "LruKKVCache 不支持 setnx：本实现的写入要过 LRU-K 的准入闸门"
-                    + "（攒够 threshold=" + threshold + " 次访问才落地），"
-                    + "而 setnx 的语义是'不存在就写、写了就有'，两者对不上。"
-                    + "要'写过就进'的语义请改用 LruKVCache。");
+    throw new CacheUnsupportedOperationException(Slf4jUtils.format(
+            "LruKKVCache does not support setnx: writes in this implementation must pass the LRU-K admission"
+                    + " gate (at least threshold={} accesses before a value lands), which conflicts with setnx"
+                    + " semantics ('write if absent')."
+                    + " Use LruKVCache if you need write-through admission.", threshold));
   }
 
   /**
-   * <b>不支持，一律抛出 {@link UnsupportedOperationException}。</b>
+   * <b>不支持，一律抛出 {@link CacheUnsupportedOperationException}。</b>
    * <p>
-   * 拒绝的理由与 {@link #setnx(Object, Object)} 完全相同：本方法的写动作最终也是 {@code set}，
-   * 同样要过准入闸门，结果可能并不落在缓存里。{@code computeIfAbsent} 的约定是"返回缓存中的
-   * 值"，返回值因此不可信；而 {@code null} 的含义已经用满（表示"算出来是 null、没有写入"），
-   * 不能再兼任"写进去了但没落地"。需要"回源 + 写入"时请用 {@code EvictableKVCacheWrapper}
-   * 那条 {@code setnx}（它有"值是否实际进入缓存"的判定），或者改用 {@link LruKVCache}。
+   * {@code computeIfAbsent} 的契约是"<b>不存在时计算并写入，然后返回缓存中的值</b>"：
+   * 命中直接返回值；未命中则调用 {@code mappingFunction}，把非 null 的结果写进缓存，并返回
+   * 这个已经落在缓存里的值。它要求这次"写"立即生效，调用方才能依赖"返回非 null 就表示
+   * 缓存里有值"。
+   * <p>
+   * 本实现的写入必须经过 LRU-K 的准入闸门：key 未命中时，{@code set} 可能因访问次数不足
+   * {@code threshold} 而根本不落地。此时方法已经算出了值，缓存里却没有它，而返回值无法表达
+   * 这种失败 —— {@code null} 的语义已经被"mappingFunction 返回 null、没有写入"占用。
+   * 返回算出的值是在撒谎（它不在缓存里），返回 {@code null} 也是在撒谎（函数并没有返回
+   * null）。因此整个操作不提供，而不是返回一个调用方无法判断的值。
+   * <p>
+   * 与 {@link #setnx(Object, Object)} 的区别：{@code setnx} 只需要回答"写没写"，这里回答的是
+   * "缓存里现在是什么值"，对"没落地"更不可容忍。
    * <p>
    * 参数不校验：key 与 {@code mappingFunction} 为 null 时同样抛此异常 —— 整个操作都不支持，
    * 参数语义不再适用（见 {@link KVCache} 的异常口径第 1 条）。
+   * <p>
+   * 需要"回源 + 写入"时：改用 {@link LruKVCache}（写过即进），或用
+   * {@code EvictableKVCacheWrapper} 的 {@code setnx} 路径（它单独判定值是否实际进入缓存）。
    */
   @Override
   public V computeIfAbsent(K k, Function<? super K, ? extends V> mappingFunction) {
-    throw new UnsupportedOperationException(
-            "LruKKVCache 不支持 computeIfAbsent：本实现的写入要过 LRU-K 的准入闸门"
-                    + "（攒够 threshold=" + threshold + " 次访问才落地），"
-                    + "算出来的值可能压根没进缓存，返回值因此不可信；"
-                    + "而 null 在本方法上已经表示'算出来是 null'，不能再兼任'没落地'。"
-                    + "要'写过就进'的语义请改用 LruKVCache。");
+    throw new CacheUnsupportedOperationException(Slf4jUtils.format(
+            "LruKKVCache does not support computeIfAbsent: it must compute on a miss, write the value,"
+                    + " and return the value now in the cache; but writes here must pass the LRU-K admission"
+                    + " gate (threshold={}), so the computed value may not land and the return value cannot"
+                    + " express that failure. Use LruKVCache for write-through admission.", threshold));
   }
 
   /**

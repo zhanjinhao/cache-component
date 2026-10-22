@@ -208,13 +208,13 @@ public class KVCacheContractTest {
 
   /**
    * <b>{@link KVCache} 的两个默认方法同样要拒绝 null key</b>，且口径与其它方法一致：
-   * 一律 {@link IllegalArgumentException}。
+   * 一律 {@code CacheIllegalArgumentException}。
    * <p>
    * {@link KVCache#remove(Object)} 与 {@link KVCache#computeIfAbsent(Object, Function)}
-   * 一度<b>没有</b>在入口校验，靠下游的 {@link KVCache#get(Object)} 兜住（{@code get(null)} 抛 IAE）。
+   * 一度<b>没有</b>在入口校验，靠下游的 {@link KVCache#get(Object)} 兜住（{@code get(null)} 抛 CacheIllegalArgumentException）。
    * 那让"同一个非法 key 换一个方法就换一种异常"：{@code computeIfAbsent(null, null)} 在走默认
    * 实现的那些类上抛的是 {@link NullPointerException}（{@code requireNonNull} 排在前面），
-   * 在覆盖成底层原子版本的 CHM 系上抛的是 IAE。现在两个默认方法都在开头调
+   * 在覆盖成底层原子版本的 CHM 系上抛的是 CacheIllegalArgumentException。现在两个默认方法都在开头调
    * {@code assertKeyNotNull}，与"key 为 null 是本接口对所有方法一致约定的调用方错误"对齐 ——
    * 所以下面连"两个参数都是 null"这一格也一并断言。
    */

@@ -1,5 +1,7 @@
 package cn.addenda.component.cache.eviction.lru;
 
+import cn.addenda.component.base.string.Slf4jUtils;
+import cn.addenda.component.cache.CacheIllegalArgumentException;
 import cn.addenda.component.cache.HashMapKVCache;
 import cn.addenda.component.cache.KVCache;
 
@@ -59,11 +61,11 @@ public class LruKHashMapKVCache<K, V> extends LruKKVCache<K, V> {
    */
   private static int visitorCountCapacity(int capacity) {
     if ((long) capacity * 2 > KVCache.UNLIMITED_CAPACITY) {
-      throw new IllegalArgumentException(
-              "主缓存容量过大：访问计数账本的容量取它的 2 倍，而账本自身也不得超过 "
-                      + KVCache.UNLIMITED_CAPACITY + "（KVCache.UNLIMITED_CAPACITY）；"
-                      + "因此主缓存容量不能超过 " + (KVCache.UNLIMITED_CAPACITY / 2)
-                      + "，当前值：[" + capacity + "]。");
+      throw new CacheIllegalArgumentException(Slf4jUtils.format(
+              "Primary cache capacity is too large: the visitor-count ledger capacity is twice that value,"
+                      + " and the ledger itself must not exceed {} (KVCache.UNLIMITED_CAPACITY);"
+                      + " therefore the primary cache capacity must not exceed {}; current value: [{}].",
+              KVCache.UNLIMITED_CAPACITY, KVCache.UNLIMITED_CAPACITY / 2, capacity));
     }
     return capacity * 2;
   }

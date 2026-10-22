@@ -38,7 +38,7 @@ public abstract class ExpiredMapKVCache<K, V> implements ExpiredKVCache<K, V> {
 
   protected ExpiredMapKVCache(Map<K, Binary<V, Long>> map) {
     if (map == null) {
-      throw new IllegalArgumentException("map is null!");
+      throw new CacheIllegalArgumentException("map must not be null!");
     }
     this.map = map;
   }

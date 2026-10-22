@@ -27,7 +27,7 @@ import java.util.Map;
  *       即"LRU-K 在阈值为 1 时退化为 LRU"。</li>
  * </ul>
  * 两者的差别只有 {@code setnx}：{@link LruKKVCache} 明确不支持（抛
- * {@link UnsupportedOperationException}），因此涉及 {@code setnx} 的断言只跑
+ * {@code CacheUnsupportedOperationException}），因此涉及 {@code setnx} 的断言只跑
  * {@link LruKVCache}，其不支持的行为由
  * {@code EvictableKVCacheWrapperContractTest#testSetnxIsUnsupportedOnLruKKVCache} 单独钉。
  * <p>
@@ -313,8 +313,9 @@ public class LruKVCacheTest {
    * key 为 null 一律拒绝。
    * <p>
    * 但拒绝的类型分两种：{@link LruKKVCache} 的 {@code setnx} 是<b>无条件拒绝</b>，
-   * 不校验参数（见 {@code KVCache} 的异常口径第 1 条），null key 也抛 UOE；
-   * 其余方法（以及支持 setnx 的实现）入口先校验 key，抛 IAE。
+   * 不校验参数（见 {@code KVCache} 的异常口径第 1 条），null key 也抛
+   * {@code CacheUnsupportedOperationException}；其余方法（以及支持 setnx 的实现）入口先校验 key，
+   * 抛 {@code CacheIllegalArgumentException}。
    */
   @Test
   public void testNullKeyRejected() {
@@ -327,7 +328,7 @@ public class LruKVCacheTest {
         CacheAssertions.assertRejected(name + ": setnx", () -> cache.setnx(null, "v"));
         CacheAssertions.assertRejected(name + ": setnx(k, null)", () -> cache.setnx(null, null));
       } else {
-        // 无条件拒绝：UOE 优先于参数校验
+        // 无条件拒绝：CacheUnsupportedOperationException 优先于参数校验
         CacheAssertions.assertNotSupported(name + ": setnx", () -> cache.setnx(null, "v"));
         CacheAssertions.assertNotSupported(name + ": setnx(k, null)", () -> cache.setnx(null, null));
       }
