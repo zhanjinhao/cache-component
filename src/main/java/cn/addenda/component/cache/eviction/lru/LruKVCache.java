@@ -18,8 +18,9 @@ import cn.addenda.component.cache.eviction.EvictableKVCacheWrapper;
  * 读取、以及写入命中已有 key 时，都要先 {@link #delete} 再追加到队尾，见
  * {@link LruDeque#addLast}。
  * <p>
- * <b>安全级别</b>：无。队列与底层 cache 是两块独立状态，无法合并为一条原子命令。
- * 需要并发正确性时使用 {@link cn.addenda.component.cache.SynchronizedKVCache} 包装。
+ * <b>并发安全级别</b>：L0（只支持串行）。{@code get} 命中时会把 key 移到队尾，<b>读也会修改队列</b>；
+ * 队列与底层 cache 又是两块独立状态，无法合并为一条原子命令。需要并发正确性时使用
+ * {@link cn.addenda.component.cache.SynchronizedKVCache} 包装（L4）。
  *
  * @author addenda
  * @since 2023/05/30

@@ -6,8 +6,8 @@ package cn.addenda.component.cache;
  * 与 {@link KVCacheWrapper} 一致，带过期时间的 {@code set} 与 {@code setnx} <b>均由子类各自
  * 实现</b>，这里不提供默认转发 —— 转发会绕过子类自身叠加的行为（登记统计、控制准入、加锁等）。
  * <p>
- * <b>安全级别</b>：与 {@link KVCacheWrapper} 一致 —— 由子类决定，本类不做声明
- * （见 {@link SynchronizedExpiredKVCache}）。
+ * <b>并发安全级别</b>：与 {@link KVCacheWrapper} 一致 —— 由子类决定，本类只有 L0（串行）语义
+ * （L4 见 {@link SynchronizedExpiredKVCache}）。
  *
  * @author addenda
  */

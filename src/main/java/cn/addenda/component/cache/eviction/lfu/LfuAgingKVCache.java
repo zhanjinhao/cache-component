@@ -28,7 +28,7 @@ import java.util.List;
  * 衰减只能让被刷高的分数慢慢回落，防"调用方反复写来刷分"仍需把
  * {@link #isCountWriteAsVisit()} 设为 {@code false}。
  * <p>
- * <b>安全级别</b>：无，见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}；
+ * <b>并发安全级别</b>：L0（只支持串行），见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}；
  * 需要并发正确性时使用 {@link cn.addenda.component.cache.SynchronizedKVCache} 包装。
  *
  * @author addenda

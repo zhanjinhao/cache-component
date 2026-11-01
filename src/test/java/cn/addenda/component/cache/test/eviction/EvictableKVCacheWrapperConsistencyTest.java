@@ -319,7 +319,7 @@ public class EvictableKVCacheWrapperConsistencyTest {
   }
 
   /**
-   * <b>LFU：计数表为空时不淘汰、也不抛异常</b>（这条路径曾经会 NPE）。
+   * <b>LFU：计数表为空时不淘汰、也不抛异常</b>（该路径必须不抛异常，计数表为空时也一样）。
    */
   @Test
   public void testLfuDoesNotThrowWithAnEmptyCountTable() {

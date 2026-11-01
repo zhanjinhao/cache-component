@@ -15,11 +15,9 @@ import java.util.concurrent.TimeUnit;
  * {@link ExpiredKVCache} 的 TTL 换算规则：{@link ExpiredKVCache#ttlMillis} 与
  * 建立在它之上的 {@link ExpiredKVCache#deadline}。
  * <p>
- * 这两个方法的意义不在于算术本身，而在于<b>它是所有实现共用的唯一一份规则</b>。
- * 此前不是：两个 lettuce 实现各自持有一份私有取整逻辑，redisson 与 spring-data-redis
- * 把非正 timeout 原样下发给服务端、换来一句 {@code ERR invalid expire time}，
- * 而两个内存实现走的是 {@code deadline} —— 同一份 {@code timeout = 0} 的配置，
- * 在六个都实现本接口的实现上要么"立即过期"、要么抛异常。
+ * 这两个方法的意义不在于算术本身，而在于<b>它是所有实现共用的唯一一份规则</b>：
+ * 非正 timeout 统一取整为 1ms，六个实现对同一份 {@code timeout = 0} 的配置都表现为
+ * 立即过期，不会各自换算或原样下发给服务端。
  * <p>
  * 所以下面分两层验证：
  * <ol>
@@ -77,8 +75,8 @@ public class ExpiredTtlTest {
   }
 
   /**
-   * 溢出仍然饱和到 {@link Long#MAX_VALUE}（"永不过期"），这条规则在把 TTL 换算
-   * 抽出来之后必须保持不变：直接相加回绕成负数会让条目一写进去就被判过期。
+   * 溢出仍然饱和到 {@link Long#MAX_VALUE}（"永不过期"）：直接相加回绕成负数会让条目
+   * 一写进去就被判过期。
    */
   @Test
   public void testDeadlineSaturatesOnOverflow() {

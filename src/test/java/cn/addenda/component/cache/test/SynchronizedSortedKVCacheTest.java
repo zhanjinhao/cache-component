@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 契约层面的东西（null 语义、key 校验、六个实现都跑的那组断言）在
  * {@link KVCacheContractTest} 里已覆盖，这里只钉它自己的两点：
  * <b>有序视图被完整保留</b>（这正是它相对 {@link cn.addenda.component.cache.SynchronizedKVCache}
- * 的意义），以及 <b>L1 + L2</b> —— 底层是普通 {@link TreeMapKVCache}（完全不线程安全）
+ * 的意义），以及 <b>L4</b> —— 底层是普通 {@link TreeMapKVCache}（完全不线程安全）
  * 时，包一层也能拿到并发正确性。
  *
  * @author addenda
@@ -38,11 +38,10 @@ public class SynchronizedSortedKVCacheTest {
    * 有序视图原样保留：首尾按 key 的自然顺序取，<b>空表返回 null</b>
    * （包装层原样转发底层，见 {@link SortedKVCache#getFirst()}）。
    * <p>
-   * 这里以前断的是"空表抛 {@code NoSuchElementException}，与底层一致"—— 那正是把
-   * {@code TreeMap.firstKey()} 的原生行为照搬了出来。后来改了：空集是一条正常的业务路径
-   * （缓存当然是空的），不该逼调用方用异常处理它；而 {@code null} 在这里无歧义，
-   * 因为 {@code KVCache} 的 key 不允许为 null。仓库内 {@code LruDeque#getFirst()}
-   * 一直是这个口径，两边统一了。
+   * 空集返回 {@code null}，而不是抛 {@code NoSuchElementException}：空集是一条正常的业务
+   * 路径（缓存当然是空的），不该逼调用方用异常处理它；{@code null} 在这里无歧义，因为
+   * {@code KVCache} 的 key 不允许为 null。仓库内 {@code LruDeque#getFirst()} 也是这个口径，
+   * 两边一致。
    * <p>
    * 对照：用 {@code SynchronizedKVCache.synchronize(new TreeMapKVCache<>())} 包出来的
    * 实例是 {@code KVCache}，这三个方法<b>拿不到</b>。
@@ -89,11 +88,11 @@ public class SynchronizedSortedKVCacheTest {
   }
 
   /**
-   * <b>L2：并发 computeIfAbsent 只算一次。</b>
+   * <b>L4（读写都原子）：并发 computeIfAbsent 只算一次。</b>
    * <p>
-   * 底层是普通 {@link TreeMapKVCache}，自身连 L1 都不承诺；
+   * 底层是普通 {@link TreeMapKVCache}，自身只有 L1（并发读）语义；
    * 包装层把整段 check-then-act 锁住之后，既能安全并发、又只算一次。
-   * 与 {@link L2ContractMatrixTest#testComputeIfAbsentIsAtomicOrRefused()} 里
+   * 与 {@link L3ContractMatrixTest#testComputeIfAbsentIsAtomicOrRefused()} 里
    * {@code ConcurrentHashMapKVCache} 那一格同形 —— 那边靠 ConcurrentHashMap 的原生子操作，
    * 这边靠整段持锁。
    */

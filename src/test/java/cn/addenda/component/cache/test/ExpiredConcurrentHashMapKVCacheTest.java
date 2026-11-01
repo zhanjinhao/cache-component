@@ -77,7 +77,7 @@ public class ExpiredConcurrentHashMapKVCacheTest {
    * 各实现在过期条目上的完整口径（含 {@code containsKey} / {@code remove} /
    * 不带 TTL 的 {@code setnx} 这三点）由
    * {@code ExpiredKVCacheContractTest#testExpiredEntrySemanticsAcrossImpls} 统一钉住 ——
-   * 本类与 {@code ExpiredHashMapKVCache} 在这三点上已经对齐，不要再按"两者相反"理解。
+   * 本类与 {@code ExpiredHashMapKVCache} 在这三点上口径一致。
    */
   @Test
   public void testComputeIfAbsentRecomputesWhenExpired() throws Exception {

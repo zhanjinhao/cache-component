@@ -337,8 +337,8 @@ public class EvictableKVCacheWrapperOperationBoundaryTest {
   }
 
   /**
-   * {@code setnx} 成功之后，那条记录要真的参与淘汰 ——
-   * 不能像以前那样绕开统计、导致缓存插多少活多少。
+   * {@code setnx} 成功写入的 key 必须进入淘汰统计，使缓存条数受容量约束，
+   * 不会插多少活多少。
    */
   @Test
   public void testSetnxWrittenKeysParticipateInEviction() {

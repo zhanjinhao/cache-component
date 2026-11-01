@@ -13,7 +13,7 @@ import cn.addenda.component.cache.HashMapKVCache;
  * <p>
  * 需要换某一代的存储时，继承 {@link LruGenerationKVCache} 自己传。
  * <p>
- * <b>安全级别</b>：无，见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}。
+ * <b>并发安全级别</b>：L0（只支持串行），见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}。
  *
  * @author addenda
  * @since 2023/05/30

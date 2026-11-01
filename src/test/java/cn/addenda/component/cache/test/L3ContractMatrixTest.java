@@ -2,8 +2,6 @@ package cn.addenda.component.cache.test;
 
 import cn.addenda.component.base.util.SleepUtils;
 import cn.addenda.component.cache.CacheUnsupportedOperationException;
-import cn.addenda.component.cache.ConcurrentHashMapKVCache;
-import cn.addenda.component.cache.ExpiredConcurrentHashMapKVCache;
 import cn.addenda.component.cache.ExpiredHashMapKVCache;
 import cn.addenda.component.cache.ExpiredKVCache;
 import cn.addenda.component.cache.HashMapKVCache;
@@ -26,7 +24,6 @@ import org.junit.Before;
 import org.junit.Test;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -43,25 +40,24 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 /**
- * <b>L2 契约矩阵</b>：把"声明为 L1 + L2"的实现<b>全部</b>收在一张表里，
- * 逐个验证它们对得起这个声明。
+ * <b>L3 契约矩阵</b>：把"声明为至少 L3"的实现<b>全部</b>收在一张表里，
+ * 逐个验证它们对得起这个声明。L4 实现（读写都原子）自动满足 L3，因此也一并登记。
  * <p>
- * 要钉的是同一条规则（见 {@link KVCache} 的 L2 层）：<b>原子性不可部分承诺</b> ——
+ * 要钉的是同一条规则（见 {@link KVCache} 的 L3 层）：<b>原子性不可部分承诺</b> ——
  * 复合操作要么做成原子的，要么<b>明确拒绝</b>（抛 {@link CacheUnsupportedOperationException}），
  * 不允许悄悄退回接口默认实现。默认实现由 get 与写两步组成，多线程可以同时通过"检查"环节，
  * 而且<b>从签名上完全看不出来</b>：调用方以为拿到了原子操作，实际拿到的是竞态。
  * <p>
- * 为什么值得单独一个文件：这条规则此前<b>只写在注释里</b>，没有任何用例会发现"某个自称
- * L1 + L2 的实现偷偷用了默认实现"。各实现自己的用例是分头写的 ——
- * {@code KVCacheContractTest} 管内存那几家、{@code ExpiredKVCacheContractTest} 管带 TTL 的那几家，
- * 各测各的"正向"或"反向"，没有一处把"声明了 L2 的全部实现"当成一个整体来对账。
- * 于是漏掉一个实现、或者它悄悄退化，都不会有人发现。
+ * 为什么值得单独一个文件：这条规则需要一张统一的实现清单来兜底。各实现自己的用例是分头
+ * 写的 —— {@code KVCacheContractTest} 管内存那几家、{@code ExpiredKVCacheContractTest}
+ * 管带 TTL 的那几家，各测各的"正向"或"反向"；只有把声明了至少 L3（含 L4）的全部实现放在
+ * 一张表里对账，才能发现漏登记或某个实现悄悄退化。
  * <p>
  * 六条断言：
  * <ol>
- *   <li>{@link #testRegistryMatchesTheDeclaredL2Implementations()} —— 表本身要对，
+ *   <li>{@link #testRegistryMatchesTheDeclaredL3Implementations()} —— 表本身要对，
  *       少了谁、多了谁都要红（矩阵漏跑比没有矩阵更糟）；</li>
- *   <li>{@link #testNoDeclaredL2ImplUsesTheInterfaceDefaultForCompositeOps()} ——
+ *   <li>{@link #testNoDeclaredL3ImplUsesTheInterfaceDefaultForCompositeOps()} ——
  *       <b>结构性</b>：两个复合默认方法由实现自己声明，不许直接用接口默认实现；</li>
  *   <li>{@link #testComputeIfAbsentIsAtomicOrRefused()}、{@link #testSetnxIsAtomicOrRefused()}、
  *       {@link #testTtlComputeIfAbsentIsAtomicOrRefused()}、{@link #testTtlSetnxIsAtomicOrRefused()}
@@ -74,7 +70,7 @@ import java.util.function.Function;
  * <p>
  * <b>四条行为性断言的鉴别力不一样，别当成等强：</b>
  * {@code computeIfAbsent} 那两条能把窗口<b>确定性地拉开</b> —— {@code mappingFunction} 是本地
- * 代码，让它先睡 100ms，"检查"与"写入"之间的竞态必然暴露；{@code setnx} 那两条做不到，
+ * 代码，让它先睡 100ms，"检查"与"写入"之间的竞态必然暴露；{@code setnx} 那两条没有可控窗口，
  * 窗口完全在实现内部，只能靠 8 个线程自然撞 —— 一次"先查后写"的实现只要落在同一个哈希桶上、
  * 又足够快，就可能一次都不撞上。实测：把 {@code ExpiredHashMapKVCache} 临时注册进来，
  * 两条 {@code computeIfAbsent} 都稳定报 {@code expected:<1> but was:<8>}，
@@ -86,24 +82,26 @@ import java.util.function.Function;
  * 因此这里只保证"没退回接口默认实现"，挡不住"自己写了个貌似原子的 remove"——
  * {@code KVCacheContractTest#testDefaultRemoveIsNotAtomic} 从反向钉着默认实现。
  * <p>
- * <b>这套断言不是空跑的</b>：把 {@link HashMapKVCache}（"安全级别：无"，{@code computeIfAbsent}
- * 用的正是接口默认实现）临时注册进 {@link #declaredL2}，第 1、2、3 条会一起变红 ——
- * 清单报出多出来的那个名字、结构性那条指出它"直接用了接口默认实现（声明类 KVCache）"、
- * 行为性那条报 {@code mappingFunction} 被调用了 8 次而不是 1 次。
- * 第 4 条不该红，也确实没红：{@code HashMapKVCache.setnx} 本来就是原子的。
+ * <b>这套断言不是空跑的</b>：把 {@link HashMapKVCache}（"并发安全级别：L1（只支持并发读）"，
+ * {@code computeIfAbsent} 用的正是接口默认实现）临时注册进 {@link #declaredL3}，第 1、2、3 条
+ * 会一起变红 —— 清单报出多出来的那个名字、结构性那条指出它"直接用了接口默认实现（声明类
+ * KVCache）"、行为性那条报 {@code mappingFunction} 被调用了 8 次而不是 1 次。
+ * 第 4 条在本机实测没有稳定变红：单次 {@code putIfAbsent} 在争用窗口很小时容易只成功一次；
+ * 这不改变 {@code HashMapKVCache} 只有 L1 的结论。
  *
  * @author addenda
  */
 @Slf4j
-public class L2ContractMatrixTest {
+public class L3ContractMatrixTest {
 
   /**
-   * 声明为 L1 + L2 的实现，键是类的简单名。
+   * 声明为至少 L3 的实现，键是类的简单名；L4 实现也登记在这里（L4 必然满足 L3）。
    * <p>
-   * <b>手工维护</b>，和仓库里其他契约测试的实现清单一样 —— 新增一个 L1 + L2 的实现就要加进来，
-   * 漏了由 {@link #testRegistryMatchesTheDeclaredL2Implementations()} 负责报错。
+   * <b>手工维护</b>，和仓库里其他契约测试的实现清单一样 —— 新增一个声明 L3 的实现就要加进来，
+   * 达到 L4 的实现同样登记，漏了由 {@link #testRegistryMatchesTheDeclaredL3Implementations()}
+   * 负责报错。
    */
-  private final Map<String, KVCache<String, String>> declaredL2 = new LinkedHashMap<>();
+  private final Map<String, KVCache<String, String>> declaredL3 = new LinkedHashMap<>();
 
   /**
    * 并发用例的线程数：8 是仓库里其他并发用例的既有取值（{@code KVCacheContractTest}、
@@ -116,17 +114,13 @@ public class L2ContractMatrixTest {
   @Before
   @SneakyThrows
   public void before() {
-    // ---- 靠底层存储本身达到 L1 + L2 的两家 ----
-    register(new ConcurrentHashMapKVCache<String, String>());
-    register(new ExpiredConcurrentHashMapKVCache<String, String>());
-
-    // ---- 靠一把锁把底层补到 L1 + L2 的三家 ----
-    // 被包装的都是"安全级别：无"的实现，正好说明 L1 / L2 是包装层补上来的
+    // ---- 靠一把锁把底层补到 L4 的三家 ----
+    // 被包装的是普通 Map / 淘汰实现，正好说明 L4 是包装层补上来的（L4 已包含全部低级别）
     register(SynchronizedKVCache.synchronize(new HashMapKVCache<String, String>()));
     register(SynchronizedExpiredKVCache.synchronize(new ExpiredHashMapKVCache<String, String>()));
     register(SynchronizedSortedKVCache.synchronize(new TreeMapKVCache<>()));
 
-    // ---- 靠服务端命令原子性达到 L1 + L2 的四家 ----
+    // ---- 靠服务端命令原子性达到 L3 的四家 ----
     RedisClient redisClient = RedisClientBaseTest.redisClient();
     resources.add(redisClient::shutdown);
     register(new LettuceRedisKVCache(redisClient));
@@ -141,8 +135,7 @@ public class L2ContractMatrixTest {
 
     LettuceConnectionFactory factory = StringRedisTemplateBaseTest.lettuceConnectionFactory();
     resources.add(factory::destroy);
-    StringRedisTemplate template = StringRedisTemplateBaseTest.stringRedisTemplate(factory);
-    register(new StringRedisTemplateRedisKVCache(template));
+    register(new StringRedisTemplateRedisKVCache(factory));
   }
 
   @After
@@ -157,20 +150,19 @@ public class L2ContractMatrixTest {
   }
 
   private void register(KVCache<String, String> cache) {
-    declaredL2.put(cache.getClass().getSimpleName(), cache);
+    declaredL3.put(cache.getClass().getSimpleName(), cache);
   }
 
   /**
-   * <b>表要对。</b>矩阵是一份"谁声明了 L1 + L2"的清单，清单本身错了，后面几条断言跑得再认真也没意义。
+   * <b>表要对。</b>矩阵是一份"谁声明了至少 L3"的清单，清单本身错了，后面几条断言跑得再
+   * 认真也没意义。
    * <p>
-   * 新增一个声明 L1 + L2 的实现时，这里会红 —— 提醒作者把它加进 {@link #declaredL2}，
+   * 新增一个声明 L3 的实现时，这里会红 —— 提醒作者把它加进 {@link #declaredL3}，
    * 而不是让它绕开整套矩阵。
    */
   @Test
-  public void testRegistryMatchesTheDeclaredL2Implementations() {
+  public void testRegistryMatchesTheDeclaredL3Implementations() {
     TreeSet<String> expected = new TreeSet<>(Arrays.asList(
-            "ConcurrentHashMapKVCache",
-            "ExpiredConcurrentHashMapKVCache",
             "SynchronizedKVCache",
             "SynchronizedExpiredKVCache",
             "SynchronizedSortedKVCache",
@@ -178,25 +170,25 @@ public class L2ContractMatrixTest {
             "LettuceRedisClusterKVCache",
             "RedissonRedisKVCache",
             "StringRedisTemplateRedisKVCache"));
-    Assert.assertEquals("声明为 L1 + L2 的实现有变动：新增/删除实现必须同步改这里，"
+    Assert.assertEquals("声明为至少 L3 的实现有变动：新增/删除实现必须同步改这里，"
             + "否则它会绕过整套矩阵 —— 漏跑比没有矩阵更糟",
-            expected, new TreeSet<>(declaredL2.keySet()));
+            expected, new TreeSet<>(declaredL3.keySet()));
   }
 
   /**
    * <b>结构性：复合操作不许退回接口默认实现。</b>
    * <p>
    * {@link KVCache#remove(Object)} 与 {@link KVCache#computeIfAbsent(Object, Function)}
-   * 是接口上仅有的两个默认实现，而它们<b>不属于 L2</b>（见 {@link KVCache} 的 L2 层）。
-   * 所以：声明了 L1 + L2 的实现，这两个方法必须由自己（或自己的某个父类）声明出来，
+   * 是接口上仅有的两个默认实现，而它们<b>只有逐步调用语义</b>（都是写操作，见 {@link KVCache} 的 L3 层）。
+   * 所以：声明了至少 L3 的实现，这两个方法必须由自己（或自己的某个父类）声明出来，
    * 声明类不能是接口本身。
    * <p>
    * 不校验 {@code setnx}：它在 {@link KVCache} 上是<b>抽象</b>方法，没有默认实现可退，
    * 谁都得自己声明。它由下面那条行为性断言覆盖。
    */
   @Test
-  public void testNoDeclaredL2ImplUsesTheInterfaceDefaultForCompositeOps() {
-    for (Map.Entry<String, KVCache<String, String>> entry : declaredL2.entrySet()) {
+  public void testNoDeclaredL3ImplUsesTheInterfaceDefaultForCompositeOps() {
+    for (Map.Entry<String, KVCache<String, String>> entry : declaredL3.entrySet()) {
       assertNotInterfaceDefault(entry.getKey(), entry.getValue(),
               "remove", Object.class);
       assertNotInterfaceDefault(entry.getKey(), entry.getValue(),
@@ -216,8 +208,8 @@ public class L2ContractMatrixTest {
     Class<?> declaringClass = method.getDeclaringClass();
     Assert.assertFalse(name + " 的 " + methodName + " 直接用了接口默认实现（声明类 "
                     + declaringClass.getSimpleName() + "）。"
-                    + "接口默认实现由 get 与写两步组成、达不到 L2 —— "
-                    + "做不到原子的就明确拒绝（抛 CacheUnsupportedOperationException），不要静默降级",
+                    + "接口默认实现由 get 与写两步组成、写操作只有逐步调用语义 —— "
+                    + "只提供单 key 原子能力的就明确拒绝（抛 CacheUnsupportedOperationException），不要静默降级",
             declaringClass == KVCache.class || declaringClass == ExpiredKVCache.class);
   }
 
@@ -232,7 +224,7 @@ public class L2ContractMatrixTest {
    */
   @Test
   public void testComputeIfAbsentIsAtomicOrRefused() throws Exception {
-    for (Map.Entry<String, KVCache<String, String>> entry : declaredL2.entrySet()) {
+    for (Map.Entry<String, KVCache<String, String>> entry : declaredL3.entrySet()) {
       String name = entry.getKey();
       KVCache<String, String> cache = entry.getValue();
 
@@ -240,7 +232,7 @@ public class L2ContractMatrixTest {
       try {
         cache.computeIfAbsent(probeKey, k -> "probe");
       } catch (CacheUnsupportedOperationException refused) {
-        log.info("{} 明确拒绝了 computeIfAbsent（L2 允许，做不到就拒绝）", name);
+        log.info("{} 只提供单 key 原子能力，明确拒绝 computeIfAbsent（符合 L3 的不可部分承诺）", name);
         continue;
       } finally {
         cache.delete(probeKey);
@@ -262,11 +254,11 @@ public class L2ContractMatrixTest {
    * <p>
    * {@code setnx} 也是 check-then-act（"不存在才写"），同一个道理：并发抢同一个 key 只能有一个成功。
    * 明确拒绝的实现（如 {@code LruKKVCache}）合法，但那个不在这张表里 ——
-   * 它声明的是"安全级别：无"。
+   * 它声明的是"并发安全级别：L0（只支持串行）"。
    */
   @Test
   public void testSetnxIsAtomicOrRefused() throws Exception {
-    for (Map.Entry<String, KVCache<String, String>> entry : declaredL2.entrySet()) {
+    for (Map.Entry<String, KVCache<String, String>> entry : declaredL3.entrySet()) {
       String name = entry.getKey();
       KVCache<String, String> cache = entry.getValue();
 
@@ -274,7 +266,7 @@ public class L2ContractMatrixTest {
       try {
         cache.setnx(probeKey, "probe");
       } catch (CacheUnsupportedOperationException refused) {
-        log.info("{} 明确拒绝了 setnx（L2 允许，做不到就拒绝）", name);
+        log.info("{} 只提供单 key 原子能力，明确拒绝 setnx（符合 L3 的不可部分承诺）", name);
         continue;
       } finally {
         cache.delete(probeKey);
@@ -297,7 +289,7 @@ public class L2ContractMatrixTest {
    */
   @Test
   public void testTtlComputeIfAbsentIsAtomicOrRefused() throws Exception {
-    for (Map.Entry<String, KVCache<String, String>> entry : declaredL2.entrySet()) {
+    for (Map.Entry<String, KVCache<String, String>> entry : declaredL3.entrySet()) {
       if (!(entry.getValue() instanceof ExpiredKVCache)) {
         continue;
       }
@@ -308,7 +300,7 @@ public class L2ContractMatrixTest {
       try {
         cache.computeIfAbsent(probeKey, k -> "probe", 1, TimeUnit.MINUTES);
       } catch (CacheUnsupportedOperationException refused) {
-        log.info("{} 明确拒绝了带 TTL 的 computeIfAbsent（L2 允许，做不到就拒绝）", name);
+        log.info("{} 只提供单 key 原子能力，明确拒绝带 TTL 的 computeIfAbsent（符合 L3 的不可部分承诺）", name);
         continue;
       } finally {
         cache.delete(probeKey);
@@ -333,7 +325,7 @@ public class L2ContractMatrixTest {
    */
   @Test
   public void testTtlSetnxIsAtomicOrRefused() throws Exception {
-    for (Map.Entry<String, KVCache<String, String>> entry : declaredL2.entrySet()) {
+    for (Map.Entry<String, KVCache<String, String>> entry : declaredL3.entrySet()) {
       if (!(entry.getValue() instanceof ExpiredKVCache)) {
         continue;
       }
@@ -344,7 +336,7 @@ public class L2ContractMatrixTest {
       try {
         cache.setnx(probeKey, "probe", 1, TimeUnit.MINUTES);
       } catch (CacheUnsupportedOperationException refused) {
-        log.info("{} 明确拒绝了带 TTL 的 setnx（L2 允许，做不到就拒绝）", name);
+        log.info("{} 只提供单 key 原子能力，明确拒绝带 TTL 的 setnx（符合 L3 的不可部分承诺）", name);
         continue;
       } finally {
         cache.delete(probeKey);
@@ -362,8 +354,7 @@ public class L2ContractMatrixTest {
    * 一次并发点算的结果。
    * <p>
    * 除了次数，还要把<b>各线程拿到的返回值</b>带出来：只算一次不等于每个线程都拿到了那个值 ——
-   * 理论上"算一次、其余线程拿到 null"是可能的，这条断言原来只存在于
-   * {@code ConcurrentHashMapKVCacheTest}，现在并到这里。
+   * 理论上"算一次、其余线程拿到 null"是可能的。
    */
   private static final class ConcurrentResult {
 
@@ -520,7 +511,7 @@ public class L2ContractMatrixTest {
   }
 
   private String uniqueKey(String implName) {
-    return "L2ContractMatrixTest:" + implName + ":"
+    return "L3ContractMatrixTest:" + implName + ":"
             + UUID.randomUUID().toString().replace("-", "");
   }
 

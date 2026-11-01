@@ -2,6 +2,7 @@ package cn.addenda.component.cache.test.eviction;
 
 import cn.addenda.component.cache.KVCache;
 import cn.addenda.component.cache.KVCacheWrapper;
+import cn.addenda.component.cache.MapKVCache;
 import cn.addenda.component.cache.TestDelegateAccess;
 import cn.addenda.component.cache.eviction.EvictableKVCache;
 import cn.addenda.component.cache.eviction.lfu.LfuAgingHashMapKVCache;
@@ -51,12 +52,18 @@ public class EvictableKVCacheWrapperDelegateBoundaryTest {
    * <p>
    * 用来模拟"底层存储自己也有淘汰/过期"的情况 —— 这时候上层统计不会收到任何通知。
    */
-  private static class BoundedDelegate implements KVCache<String, String> {
+  private static class BoundedDelegate extends MapKVCache<String, String> {
 
-    private final Map<String, String> map = new LinkedHashMap<>();
+    private final Map<String, String> map;
     private final int max;
 
     private BoundedDelegate(int max) {
+      this(max, new LinkedHashMap<>());
+    }
+
+    private BoundedDelegate(int max, Map<String, String> map) {
+      super(map);
+      this.map = map;
       this.max = max;
     }
 
@@ -70,6 +77,9 @@ public class EvictableKVCacheWrapperDelegateBoundaryTest {
       }
     }
 
+    /**
+     * 必须覆盖：{@link MapKVCache#setnx} 走 {@code map.putIfAbsent}，不会触发本类的裁剪。
+     */
     @Override
     public boolean setnx(String k, String v) {
       if (map.containsKey(k)) {
@@ -77,26 +87,6 @@ public class EvictableKVCacheWrapperDelegateBoundaryTest {
       }
       set(k, v);
       return true;
-    }
-
-    @Override
-    public boolean containsKey(String k) {
-      return map.containsKey(k);
-    }
-
-    @Override
-    public String get(String k) {
-      return map.get(k);
-    }
-
-    @Override
-    public boolean delete(String k) {
-      return map.remove(k) != null;
-    }
-
-    @Override
-    public int size() {
-      return map.size();
     }
 
     @Override
@@ -205,8 +195,8 @@ public class EvictableKVCacheWrapperDelegateBoundaryTest {
    * 包装一个已经有数据的 cache：{@code size()} 如实报出数据层的那条，账本还是空的；
    * 访问之后自动补登记。
    * <p>
-   * <b>同时是回归</b>：LFU 包装预置 delegate 时曾经直接在 {@code calculateKeyUsage} 里 NPE
-   * （计数表里没有这些 key，拿 null 去拆箱）。LFU 的四个实现都在 {@link #newImpls()} 里。
+   * 包装预置 delegate 时，LFU 的 {@code calculateKeyUsage} 必须处理计数表里没有的 key
+   * （不能拿 null 去拆箱）。LFU 的四个实现都在 {@link #newImpls()} 里。
    * <p>
    * 跑 {@link #newImpls()} 里的五个实现；{@link LruKHashMapKVCache} 的准入账本没有公开入口，
    * 只断言数据层。{@code LruGenerationHashMapKVCache} 不在表里：它的 delegate 是年轻代，

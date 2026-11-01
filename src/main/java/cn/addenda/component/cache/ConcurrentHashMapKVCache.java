@@ -5,13 +5,14 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 用 {@link ConcurrentHashMap} 承载的 {@link KVCache}。
  * <p>
- * <b>继承的规则</b>：Map 承载的通用语义来自 {@link MapKVCache}；L1 + L2 与原子的
+ * <b>继承的规则</b>：Map 承载的通用语义来自 {@link MapKVCache}；L2（结构安全）与原子的
  * {@code computeIfAbsent} 来自 {@link ConcurrentMapKVCache}。
  * <p>
  * <b>自身差异</b>：只有底层 Map 的选型 —— {@link ConcurrentHashMap}。
  * 需要按 key 设置过期时间时用 {@link ExpiredConcurrentHashMapKVCache}。
  * <p>
- * <b>安全级别</b>：L1 + L2，并发访问无需再用 {@link SynchronizedKVCache} 包装。
+ * <b>并发安全级别</b>：L2（结构安全），并发访问无需再用 {@link SynchronizedKVCache} 包装；
+ * {@code multiGet} / {@code containsKeys} 为逐 key 读（整批一致快照属于 L4）。
  * {@code mappingFunction} 在桶锁内执行，<b>不得回头操作本 cache</b>（JDK 8 上会永久挂死）。
  *
  * @author addenda

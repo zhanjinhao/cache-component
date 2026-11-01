@@ -19,13 +19,14 @@ import java.util.LinkedHashSet;
  * 两张统计表<b>短期失步</b>时，{@link LfuKVCache} 必须"不抛异常、也不死循环"。
  * <p>
  * {@code LfuKVCache} 的类注释把"两表不一致时清到账本低于容量为止、<b>绝不抛异常</b>"
- * 写成了承诺，而且 {@code calculateKeyUsage} 为这个状态专门做了兜底。但另外两条路径漏了：
+ * 写成承诺，而且 {@code calculateKeyUsage} 为这个状态专门做了兜底。下面两条路径也必须
+ * 满足同一承诺：
  * <ul>
- *   <li>{@code clearKeyStatistic}：计数表说 k 在 n 档，而档位表里已经没有 n 档 —— 原来的
- *       {@code keyList.remove(k)} 会抛 NPE。它还会被
+ *   <li>{@code clearKeyStatistic}：计数表说 k 在 n 档，而档位表里已经没有 n 档 —— 此时
+ *       {@code keyList} 为 null，清理必须安全跳过而不是抛 NPE。它还会被
  *       {@code EvictableKVCache#containsKey} 的<b>自愈路径</b>调用，在那里抛异常尤其糟；</li>
- *   <li>{@code removeMinOldest}：最小档里没有 key（空集合残留）—— 原来的
- *       {@code keyList.iterator().next()} 会抛 {@code NoSuchElementException}。</li>
+ *   <li>{@code removeMinOldest}：最小档里没有 key（空集合残留）—— 取不到 key 时必须安全
+ *       返回，而不是抛 {@code NoSuchElementException}。</li>
  * </ul>
  * <p>
  * <b>这两个状态正常路径构造不出来</b>（三个写入点都会顺手删掉空档），所以要靠注入统计结构
@@ -46,8 +47,8 @@ public class LfuKVCacheLedgerInconsistencyTest {
   /**
    * {@code clearKeyStatistic} 遇到"计数表有、档位表没有"时不该抛异常。
    * <p>
-   * 路径：{@code delete(k)} 会先调 {@code clearKeyStatistic}。原来在
-   * {@code keyList.remove(k)} 上抛 NPE（{@code keyList} 为 null）。
+   * 路径：{@code delete(k)} 会先调 {@code clearKeyStatistic}；档位缺失时 {@code keyList}
+   * 为 null，清理必须跳过它而不是抛 NPE。
    */
   @Test
   public void testClearKeyStatisticToleratesMissingTier() {
@@ -74,7 +75,7 @@ public class LfuKVCacheLedgerInconsistencyTest {
    * 同样的失步状态走<b>自愈路径</b>（{@code containsKey} 发现底层没有该 key）时也不该抛异常。
    * <p>
    * 底层已经被清掉、账本还留着 —— 这正是 {@code EvictableKVCacheWrapper#containsKey}
-   * 要负责修的那种不一致，可修的过程中自己先抛 NPE 就说不过去了。
+   * 要负责修的那种不一致；自愈路径本身必须不抛异常，否则修复不一致的过程会先失败。
    */
   @Test
   public void testContainsKeySelfHealingToleratesMissingTier() {
@@ -166,8 +167,8 @@ public class LfuKVCacheLedgerInconsistencyTest {
    * <b>空档位不能让写入陷入死循环。</b>
    * <p>
    * {@code setWhenNonContainsKey} 的淘汰循环条件同时看"计数表条数 >= 容量"和"档位表非空"。
-   * 如果 {@code removeMinOldest} 发现空档后直接 return，条件完全不变，循环会一直转下去 ——
-   * 比原来抛 {@code NoSuchElementException} 更糟（异常至少能被发现）。
+   * 如果 {@code removeMinOldest} 发现空档后直接 return，条件完全不变，循环会一直转下去；
+   * 必须删掉空档让循环取得进展。
    * 所以这里用 {@code timeout} 兜底：真死循环时用例会失败而不是把构建挂死。
    */
   @Test(timeout = 10000)
@@ -281,8 +282,9 @@ public class LfuKVCacheLedgerInconsistencyTest {
    * <p>
    * 触发一次淘汰不等于"缓存受了压"：{@code removeMinOldest} 挑出来的 key 可能早已被数据层
    * 自行删除（过期、服务端淘汰），那一次只把账本残留清掉，一条数据都没驱逐。
-   * 原实现在这里无条件 {@code ++evictionCount}，于是"账本里的 key 被数据层删光"这种
-   * 与压力无关的场景也会一点点耗掉 {@code agingInterval} 这个节流阀，让衰减在空闲时提前发生。
+   * 只有真正驱逐了数据才算缓存受压；空转（只清账本）不得推进 {@code evictionCount} 与衰减。
+   * 否则"账本里的 key 被数据层删光"这种与压力无关的场景也会一点点耗掉
+   * {@code agingInterval} 这个节流阀，让衰减在空闲时提前发生。
    * <p>
    * 用一个拒绝删除的 delegate 把"空转"钉死：淘汰发生、账本被清、但数据层一条都没少。
    */

@@ -25,7 +25,7 @@ import lombok.*;
  * 共享：{@link #size()} 为两代之和，老年代自身淘汰（按其自身容量）不会连带清理年轻代，
  * 只有 {@link #delete(Object)} 会同时清理两代。
  * <p>
- * <b>安全级别</b>：无，见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}。
+ * <b>并发安全级别</b>：L0（只支持串行），见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}。
  *
  * @author addenda
  * @since 2023/05/30x

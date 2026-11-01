@@ -19,7 +19,7 @@ package cn.addenda.component.cache;
  * 后者是"操作在当前实现或当前服务端上整体不可用"（如只读外壳的写方法、redis 不支持
  * {@code computeIfAbsent}）。两者都是 {@link CacheException} 的子类，业务侧只处理这一棵继承树。
  * <p>
- * 统一了原先使用的 JDK {@link IllegalArgumentException}：它太通用，业务系统配全局异常处理器时
+ * 不使用 JDK {@link IllegalArgumentException}：它太通用，业务系统配全局异常处理器时
  * 无法判断错误是否来自本组件。
  *
  * @author addenda

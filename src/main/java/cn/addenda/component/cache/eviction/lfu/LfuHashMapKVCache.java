@@ -11,7 +11,7 @@ import cn.addenda.component.cache.HashMapKVCache;
  * 策略，因此淘汰完全由访问次数决定，不存在第二层淘汰。需要底层再提供一层顺序保证时不要用
  * 本类，见 {@link LfuLruKVCache}。
  * <p>
- * <b>安全级别</b>：无，见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}。
+ * <b>并发安全级别</b>：L0（只支持串行），见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}。
  *
  * @author addenda
  * @since 2023/05/30

@@ -131,8 +131,8 @@ public class LruGenerationKVCacheTest {
    * <b>threshold = 0：同一毫秒内读到也提升</b> —— 判定式是"入队至今 >= threshold"。
    * <p>
    * 观测方式是提升之后年轻代队列长度变为 1。写与读紧挨着，正常情况下落在同一毫秒；
-   * 但 Java 里没有可注入的时钟，无法<b>强制</b>两次调用同毫秒 —— 若恰好跨了毫秒，旧实现
-   * （{@code > threshold}）也会提升。所以这条用例是回归网，不是"同一毫秒"的确定性证明。
+   * 但 Java 里没有可注入的时钟，无法<b>强制</b>两次调用同毫秒。判定式是"入队至今 >= threshold"，
+   * 任何一次读取都应提升（含同一毫秒）；本用例用于守住这一边界，而非确定性证明。
    */
   @Test
   public void testThresholdZeroPromotesOnImmediateRead() {

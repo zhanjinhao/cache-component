@@ -69,7 +69,7 @@ public class TreeMapKVCacheTest {
 
   /**
    * 带比较器的构造器按给定顺序排列 —— 这正是底层 {@code TreeMap} 的能力。
-   * 本类自建 map 之后，调用方无法再像用父类那样自己传一个排好序的 map，所以必须留这个入口。
+   * 带比较器的构造器让调用方直接决定排序顺序；本类自建底层 map，因此保留这个入口。
    */
   @Test
   public void testComparatorOverridesNaturalOrder() {

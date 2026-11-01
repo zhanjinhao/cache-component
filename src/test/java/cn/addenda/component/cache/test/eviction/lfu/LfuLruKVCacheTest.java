@@ -298,7 +298,7 @@ public class LfuLruKVCacheTest {
   /**
    * 仅供测试：暴露 LRU 的队列长度（本层账本）。
    * <p>
-   * {@code size()} 已改为取数据层，要看"队列里还留着多少残留"就得直接读队列 ——
+   * {@code size()} 取数据层，要看"队列里还留着多少残留"就得直接读队列 ——
    * {@code getLruDeque()} 是 protected，只能从子类里取。
    */
   private static class LruWithDequeVisible<K, V> extends LruHashMapKVCache<K, V> {

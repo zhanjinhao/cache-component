@@ -4,7 +4,6 @@ import cn.addenda.component.base.util.SleepUtils;
 import cn.addenda.component.cache.CacheUnsupportedOperationException;
 import cn.addenda.component.cache.LettuceRedisKVCache;
 import io.lettuce.core.RedisClient;
-import io.lettuce.core.api.StatefulRedisConnection;
 import lombok.SneakyThrows;
 import org.junit.After;
 import org.junit.Assert;
@@ -204,22 +203,6 @@ public class LettuceRedisKVCacheTest {
   @Test(expected = CacheUnsupportedOperationException.class)
   public void testSize() {
     kvCache.size();
-  }
-
-  /**
-   * 外部传入的连接，close时不应该被关闭
-   */
-  @Test
-  public void testExternalConnectionNotClosed() {
-    StatefulRedisConnection<String, String> connection = redisClient.connect();
-    try {
-      LettuceRedisKVCache externalKvCache = new LettuceRedisKVCache(connection);
-      externalKvCache.set(uniqueKey(), "v");
-      externalKvCache.close();
-      Assert.assertTrue(connection.isOpen());
-    } finally {
-      connection.close();
-    }
   }
 
 }

@@ -18,7 +18,7 @@ import cn.addenda.component.cache.eviction.lru.LruKVCache;
  * <b>账本</b>条数大于真实存活数量 —— 被污染的只是"淘汰挑谁"的依据；{@link #size()} <b>不受
  * 影响</b>，它取自数据层。两层的 capacity 建议保持一致，否则"底层不应自行触发淘汰"的前提不成立。
  * <p>
- * <b>安全级别</b>：无，见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}；
+ * <b>并发安全级别</b>：L0（只支持串行），见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}；
  * 需要并发正确时在外层包装 {@link cn.addenda.component.cache.SynchronizedKVCache}。
  *
  * @author addenda

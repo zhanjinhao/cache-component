@@ -267,7 +267,7 @@ public class LruKKVCacheTest {
    * 底层把值弄丢时，队列项连同"已准入 key 上可能残留的那份计数"一起清掉。
    * <p>
    * 这条分支在普通用例里<b>不可达</b>：默认 delegate 是普通 HashMap，不会自己丢数据；
-   * 而且新设计下命中不记账，正常路径不会再给已准入的 key 建记录。这里做两件事造场景：
+   * 而且命中不记账，正常路径不会给已准入的 key 建记录。这里做两件事造场景：
    * 换一个"可以按指令丢数据"的 delegate；再直接往注入的计数表里写一条残留记录
    * （并发下"读到未命中 → 别人恰好准入"的竞态仍可能留下它）。
    * <p>
@@ -367,7 +367,7 @@ public class LruKKVCacheTest {
    * 模拟过期 / 被外部删除）；{@link #capacity()} 报一个有限的大容量，表示"真实存储也有
    * 自己的上限" —— 本替身是普通 HashMap，不会因此主动淘汰，这个值在本用例里只是声明。
    * <p>
-   * <b>安全级别</b>：无（数据层是普通 HashMap），只在单线程测试里使用。
+   * <b>并发安全级别</b>：L0（只支持串行；数据层是普通 HashMap）。
    */
   private static class DroppableKVCache extends MapKVCache<String, String> {
 

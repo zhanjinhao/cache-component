@@ -13,7 +13,7 @@ import cn.addenda.component.cache.eviction.lru.LruKVCache;
  * 已满会独立淘汰其队头（{@link LfuAgingHashMapKVCache} 的 delegate 只是普通 HashMap，没这一
  * 层）。由此产生的两套统计结构与自愈路径，与 {@link LfuLruKVCache} 完全一致，详见该类说明。
  * <p>
- * <b>安全级别</b>：无，见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}。
+ * <b>并发安全级别</b>：L0（只支持串行），见 {@link cn.addenda.component.cache.eviction.EvictableKVCacheWrapper}。
  *
  * @author addenda
  * @since 2026/10/02

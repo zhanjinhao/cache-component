@@ -21,7 +21,6 @@ import org.junit.Before;
 import org.junit.Test;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -63,12 +62,12 @@ public class ExpiredKVCacheContractTest {
    * 底层存储本身线程安全的那些 —— 按 {@link cn.addenda.component.cache.KVCache} 上的约定，
    * 它们自己也必须线程安全，所以会被并发用例覆盖。
    * <p>
-   * {@code ExpiredHashMapKVCache} 不在这里：它底层是普通 HashMap，本来就不承诺线程安全。
+   * {@code ExpiredHashMapKVCache} 不在这里：它底层是普通 HashMap，只有 L0 串行语义。
    */
   private final List<ExpiredKVCache<String, String>> threadSafeCaches = new ArrayList<>();
 
   /**
-   * 每个线程在 L1 用例里写多少个独占 key，见 {@link #testThreadSafety()}。
+   * 每个线程在 L2 用例里写多少个独占 key，见 {@link #testThreadSafety()}。
    * <p>
    * 内存实现必须与 {@link #testThreadUnSafe()} 的反例同参（8×3000）—— "同一个探针在不安全的
    * 实现上能红"这句话，只有参数一致时才证明得了这条正例。redis 实现受公网 RTT 限制只能给小档，
@@ -77,7 +76,7 @@ public class ExpiredKVCacheContractTest {
    * 用 {@link IdentityHashMap}：键的语义是"哪一个实例"，不该被将来可能出现的
    * {@code equals} 实现悄悄合并。
    */
-  private final Map<ExpiredKVCache<String, String>, Integer> l1PerThread = new IdentityHashMap<>();
+  private final Map<ExpiredKVCache<String, String>, Integer> l2PerThread = new IdentityHashMap<>();
 
   /**
    * 内存实现。过期时刻由 {@link ExpiredKVCache#deadline} 自己算，溢出时饱和成"永不过期"，
@@ -120,8 +119,8 @@ public class ExpiredKVCacheContractTest {
    * 明确拒绝提供 {@code computeIfAbsent} 的实现（两个重载都抛
    * {@link CacheUnsupportedOperationException}）。
    * <p>
-   * 基于 redis 的那四个：它们做不到原子的"不存在则计算并写入"，于是选择不给非原子版本。
-   * 这是它们能声明 L2 的前提 —— 对外暴露的方法全部原子，做不到的那个直接拒绝。
+   * 基于 redis 的那四个：它们只提供值写入能力，于是对"不存在则计算并写入"明确拒绝。
+   * 这是它们能声明 L3 的前提 —— 写操作全部原子（读批量只提供逐 key 语义）。
    */
   private final List<ExpiredKVCache<String, String>> computeIfAbsentUnsupportedCaches = new ArrayList<>();
 
@@ -130,7 +129,7 @@ public class ExpiredKVCacheContractTest {
   @Before
   @SneakyThrows
   public void before() {
-    // 内存实现：底层是 HashMap，不承诺线程安全；computeIfAbsent 走接口默认实现（非原子）。
+    // 内存实现：底层是 HashMap，只有 L0 串行语义；computeIfAbsent 走接口默认实现（非原子）。
     //
     // 注意 TreeMapKVCache 加不进来 —— 它是 SortedKVCache（只继承 KVCache），
     // 不是 ExpiredKVCache，没有带 ttl 的 set/setnx。
@@ -140,13 +139,13 @@ public class ExpiredKVCacheContractTest {
     memoryCaches.add(hashCache);
 
     // 内存实现：底层是 ConcurrentHashMap，自身线程安全，且覆盖了 computeIfAbsent（原子）。
-    // 3000 与 testThreadUnSafe 的反例同参，见 l1PerThread 的说明。
+    // 3000 与 testThreadUnSafe 的反例同参，见 l2PerThread 的说明。
     ExpiredKVCache<String, String> concurrentHashMapCache = new ExpiredConcurrentHashMapKVCache<>();
     register(concurrentHashMapCache, true, true, true, 3000);
     memoryCaches.add(concurrentHashMapCache);
 
-    // 四个 redis 实现：自身线程安全；做不到原子的 computeIfAbsent，于是明确拒绝。
-    // L1 用例给 20（8 线程共 160 个 key）：公网 RTT 决定了上限，这一档看的是客户端侧不炸/不串号。
+    // 四个 redis 实现：自身线程安全；computeIfAbsent 明确拒绝。
+    // L2 用例给 20（8 线程共 160 个 key）：公网 RTT 决定了上限，这一档看的是客户端侧不炸/不串号。
     RedisClient redisClient = RedisClientBaseTest.redisClient();
     resources.add(redisClient::shutdown);
     registerRedis(new LettuceRedisKVCache(redisClient));
@@ -161,13 +160,12 @@ public class ExpiredKVCacheContractTest {
 
     LettuceConnectionFactory factory = StringRedisTemplateBaseTest.lettuceConnectionFactory();
     resources.add(factory::destroy);
-    StringRedisTemplate template = StringRedisTemplateBaseTest.stringRedisTemplate(factory);
-    registerRedis(new StringRedisTemplateRedisKVCache(template));
+    registerRedis(new StringRedisTemplateRedisKVCache(factory));
   }
 
   /**
    * 四个 redis 实现共有的性质一次登记完，免得在 {@link #before()} 里重复四遍：
-   * 自身线程安全、拒绝 {@code computeIfAbsent}、L1 用例每线程 20 个 key（公网 RTT 决定）。
+   * 自身线程安全、拒绝 {@code computeIfAbsent}、L2 用例每线程 20 个 key（公网 RTT 决定）。
    */
   private void registerRedis(ExpiredKVCache<String, String> cache) {
     register(cache, true, false, false, 20);
@@ -182,15 +180,15 @@ public class ExpiredKVCacheContractTest {
    *                                 （{@code false} 即"明确拒绝"，
    *                                 抛 {@link CacheUnsupportedOperationException}）
    * @param computeIfAbsentAtomic    它是否把 {@code computeIfAbsent} 做成了原子的（不支持时就无所谓了）
-   * @param l1PerThread              L1 并发用例里每个线程写多少个独占 key；不承诺线程安全的传 0
+   * @param l2PerThread              L2 并发用例里每个线程写多少个独占 key；只有 L0 串行语义的传 0
    */
   private void register(ExpiredKVCache<String, String> cache, boolean threadSafe,
                         boolean computeIfAbsentSupported, boolean computeIfAbsentAtomic,
-                        int l1PerThread) {
+                        int l2PerThread) {
     caches.add(cache);
     if (threadSafe) {
       threadSafeCaches.add(cache);
-      this.l1PerThread.put(cache, l1PerThread);
+      this.l2PerThread.put(cache, l2PerThread);
     }
     if (computeIfAbsentSupported) {
       computeIfAbsentSupportedCaches.add(cache);
@@ -252,8 +250,7 @@ public class ExpiredKVCacheContractTest {
   /**
    * computeIfAbsent 命中缓存时不应该再调 mappingFunction —— 和 {@code Map.computeIfAbsent} 一致。
    * <p>
-   * 之前 {@code ExpiredHashMapKVCache} 的实现是无条件先算再放进 map，
-   * 命中缓存时业务侧的计算函数照样执行，代价白付。
+   * 无条件先算再放进 map 会让命中缓存时业务侧的计算函数照样执行，代价白付。
    * <p>
    * 这里 TTL 给的是 1 分钟，覆盖的是"<b>还没到期</b>"那一半；真到期之后必须重算，
    * 见 {@link #testComputeIfAbsentRecomputesAfterExpiry()}。
@@ -348,20 +345,20 @@ public class ExpiredKVCacheContractTest {
   }
 
   /**
-   * <b>L1 结构安全（正面断言）</b>：底层存储线程安全的实现，并发调用任意方法都必须满足
+   * <b>L2 结构安全（正面断言）</b>：底层存储线程安全的实现，并发调用任意方法都必须满足
    * 「不抛异常、不损坏内部结构、不丢失已确认写入的数据」。
    * <p>
-   * 与 {@link #testThreadUnSafe()} 共用同一个探针（{@link #concurrentL1Probe}），方向相反：
-   * 那边断言 {@code lost != 0}（它达不到 L1），这边断言 {@code lost == 0}。
+   * 与 {@link #testThreadUnSafe()} 共用同一个探针（{@link #concurrentL2Probe}），方向相反：
+   * 那边断言 {@code lost != 0}（它只有 L0 串行语义），这边断言 {@code lost == 0}。
    * <b>反例那边能红，这条结论才有意义</b> —— 所以内存实现的规模必须与反例一致（8×3000），
-   * 见 {@link #l1PerThread}。
+   * 见 {@link #l2PerThread}。
    * <p>
    * redis 那四家的规模只能给小档（公网 RTT 决定的），它们在组里起的是<b>客户端侧冒烟</b>作用：
    * 共享连接 / 代理被并发调用时不炸、不串号。redis 服务端自身的并发正确性不归本组件保证。
    * <p>
-   * 与 L2 的分界：本用例只压<b>单命令</b>的结构安全。{@code setnx} / {@code computeIfAbsent}
+   * 与 L3 的分界：本用例只压<b>单命令</b>的结构安全。{@code setnx} / {@code computeIfAbsent}
    * 的原子性分别由 {@link #testSetnxIsAtomic()}、{@link #testComputeIfAbsentIsAtomicUnderConcurrency()}
-   * 负责 —— 原子性不是 L1 的必然结果。
+   * 负责 —— L2 只保证结构安全，L3 的写原子由专门用例验证。
    */
   @Test
   public void testThreadSafety() throws Exception {
@@ -369,20 +366,20 @@ public class ExpiredKVCacheContractTest {
 
     for (ExpiredKVCache<String, String> cache : threadSafeCaches) {
       String name = cache.getClass().getSimpleName();
-      int perThread = l1PerThread.get(cache);
+      int perThread = l2PerThread.get(cache);
 
-      L1ProbeResult result = concurrentL1Probe(cache, uniqueKey(name), threads, perThread,
+      L2ProbeResult result = concurrentL2Probe(cache, uniqueKey(name), threads, perThread,
               this::isTransientServerError, 120);
 
-      log.error("{}: L1 探针 {} 线程 × {} 个独占 key：校验 {} 个，丢失/写错 {} 个，异常 {} 个",
+      log.error("{}: L2 探针 {} 线程 × {} 个独占 key：校验 {} 个，丢失/写错 {} 个，异常 {} 个",
               name, threads, perThread, result.verified, result.lost, result.errors.size());
       for (Throwable error : result.errors) {
         log.error("{}", name, error);
       }
 
-      Assert.assertEquals(name + ": L1 —— 已确认写入的数据不该丢失，也不该被换成别的值",
+      Assert.assertEquals(name + ": L2 —— 已确认写入的数据不该丢失，也不该被换成别的值",
               0L, result.lost);
-      Assert.assertTrue(name + ": L1 —— 并发调用不该抛异常（瞬时抖动已剔除）：" + result.errors,
+      Assert.assertTrue(name + ": L2 —— 并发调用不该抛异常（瞬时抖动已剔除）：" + result.errors,
               result.errors.isEmpty());
       Assert.assertTrue(name + ": 至少一半的 key 要被真正校验过，否则这个用例等于没测。verified="
               + result.verified, result.verified >= threads * perThread / 2);
@@ -390,21 +387,21 @@ public class ExpiredKVCacheContractTest {
   }
 
   /**
-   * <b>L1 的反例</b>：{@code ExpiredHashMapKVCache} 达不到 L1 —— 底层是普通 HashMap。
+   * <b>L0 的反例</b>：{@code ExpiredHashMapKVCache} 只有 L0 串行语义 —— 底层是普通 HashMap。
    * <p>
    * 并发写下不只是丢数据，还会因为桶结构损坏而<b>卡死</b>。实测 8 线程 × 3000 次写：
    * 10 轮里 9 轮丢数据（丢 5%~67%）、1 轮直接卡死 —— 正常轮次只要 5~22ms，
    * 所以卡死不是"太慢"，是真的卡住了。
    * <p>
    * 断言写成 {@code lost != 0}：丢数据（{@code lost > 0}，含"值被写错"）和卡死
-   * （{@code lost == -1}）都算证明了它达不到 L1。它同时是 {@link #testThreadSafety()}
+   * （{@code lost == -1}）都算证明了它只有 L0 串行语义。它同时是 {@link #testThreadSafety()}
    * 的控制实验 —— 同一个探针、同一组参数在不安全的实现上能红，那条正例才有意义。
    * <p>
    * 反过来，如果哪天它变成 0，说明实现被换成了线程安全的，这个用例就该删掉。
    */
   @Test
   public void testThreadUnSafe() throws Exception {
-    L1ProbeResult result = concurrentL1Probe(new ExpiredHashMapKVCache<String, String>() {
+    L2ProbeResult result = concurrentL2Probe(new ExpiredHashMapKVCache<String, String>() {
     }, uniqueKey("threadUnSafe"), 8, 3000, e -> false, 20);
 
     log.error("[ExpiredHashMapKVCache] 并发写 24000 个 key：{}",
@@ -423,7 +420,7 @@ public class ExpiredKVCacheContractTest {
    */
   @Test
   public void testSynchronizedWrapperIsThreadSafe() throws Exception {
-    L1ProbeResult result = concurrentL1Probe(
+    L2ProbeResult result = concurrentL2Probe(
             SynchronizedExpiredKVCache.<String, String>synchronize(
                     new ExpiredHashMapKVCache<String, String>() {
                     }), uniqueKey("synchronizedWrapper"), 8, 3000, e -> false, 20);
@@ -433,12 +430,12 @@ public class ExpiredKVCacheContractTest {
   }
 
   /**
-   * L1 的并发探针：{@code threads} 个线程各写 {@code perThread} 个独占 key，
+   * L2 的并发探针：{@code threads} 个线程各写 {@code perThread} 个独占 key，
    * <b>每个 key 只写一次、写自己的唯一值</b>（丢了下一轮不会补上）；同时在一个共享 key 上
-   * 搅动 set / get / containsKey / delete —— L1 说的是"并发调用<b>任意</b>方法"。
+   * 搅动 set / get / containsKey / delete —— L2 说的是"并发调用<b>任意</b>方法"。
    * 结束后逐个校验：这个 key 还在，且值没被换掉。
    * <p>
-   * 三种失败信号正好对应 L1 的三条细则：
+   * 三种失败信号正好对应 L2 的三条细则：
    * <ul>
    *   <li>{@code lost > 0}：已确认写入的数据丢了，或被写成了别的值（③）；</li>
    *   <li>{@code lost == -1}：超时，多半是内部结构被并发写坏、线程卡死（②）；</li>
@@ -450,11 +447,11 @@ public class ExpiredKVCacheContractTest {
    *                       也不计入 {@code verified}；"至少一半校验过"那条断言负责兜住"全跳过了"
    * @param timeoutSeconds 等线程结束的上限；等不到即判为卡死，见 {@code lost == -1}
    */
-  private L1ProbeResult concurrentL1Probe(ExpiredKVCache<String, String> cache, String keyPrefix,
+  private L2ProbeResult concurrentL2Probe(ExpiredKVCache<String, String> cache, String keyPrefix,
                                           int threads, int perThread,
                                           Predicate<Throwable> ignorable, long timeoutSeconds)
           throws InterruptedException {
-    L1ProbeResult result = new L1ProbeResult();
+    L2ProbeResult result = new L2ProbeResult();
     String sharedKey = keyPrefix + ":shared";
     Set<String> legalSharedValues = new HashSet<>();
     for (int t = 0; t < threads; t++) {
@@ -544,9 +541,9 @@ public class ExpiredKVCacheContractTest {
   }
 
   /**
-   * {@link #concurrentL1Probe} 的结果。三个字段分别对应 L1 的三条细则，见该方法的说明。
+   * {@link #concurrentL2Probe} 的结果。三个字段分别对应 L2 的三条细则，见该方法的说明。
    */
-  private static final class L1ProbeResult {
+  private static final class L2ProbeResult {
     /**
      * 丢失或被换成别的值的 key 数；<b>-1 表示超时</b>（多半是结构被写坏、线程卡死）
      */
@@ -614,7 +611,7 @@ public class ExpiredKVCacheContractTest {
    * {@link #threadSafeCaches} / {@link #computeIfAbsentAtomicCaches} 两个登记表决定。
    * <p>
    * 目前只有内存实现做得到：{@link ExpiredConcurrentHashMapKVCache} 把整段 check-then-act
-   * 收敛到 ConcurrentHashMap 的 {@code compute} 上。基于 redis 的实现做不到 ——
+   * 收敛到 ConcurrentHashMap 的 {@code compute} 上。基于 redis 的实现只提供值写入能力 ——
    * {@code mappingFunction} 是本地代码，服务端无法参与它的求值，两次往返之间必然有窗口；
    * 那类实现要原子性只能靠 {@code CacheHelper} 的 lockAllocator 加锁。
    */
@@ -736,8 +733,8 @@ public class ExpiredKVCacheContractTest {
    * {@link Long#MAX_VALUE}）；而 {@code Long.MAX_VALUE} <b>微秒</b>换算后只有
    * 9.2e15 ms（约 29 万年），服务端接受 —— 这也是为什么矩阵不能按"输入有多大"来分档。
    * <p>
-   * 这条用例的前身是"只测非正 TTL"的单点断言（{@link #testNonPositiveTtlIsImmediatelyExpiredOnAllImpls()}）；
-   * 那个仍然保留，因为它对"不抛异常"这一点给的失败信息更直接。
+   * {@link #testNonPositiveTtlIsImmediatelyExpiredOnAllImpls()} 仍然保留，因为它对
+   * "不抛异常"这一点给的失败信息更直接。
    */
   @Test
   public void testTtlBoundaryMatrix() throws Exception {
@@ -758,7 +755,8 @@ public class ExpiredKVCacheContractTest {
 
       for (ExpiredKVCache<String, String> cache : caches) {
         String name = cache.getClass().getSimpleName() + " / " + desc;
-        String key = uniqueKey(name);
+        // desc 只用于失败信息；Redis 实现的 key 必须是 ASCII
+        String key = uniqueKey(cache.getClass().getSimpleName());
 
         try {
           cache.set(key, "v", timeout, unit);
@@ -830,7 +828,7 @@ public class ExpiredKVCacheContractTest {
    * <b>redis 那四个实现明确拒绝提供 computeIfAbsent</b>：两个重载都抛
    * {@link CacheUnsupportedOperationException}。
    * <p>
-   * 这是它们能声明 L2 的前提 —— {@code computeIfAbsent} 的语义是原子的 check-then-act，
+   * 这是它们能声明 L3 的前提 —— {@code computeIfAbsent} 是写操作，语义是原子的 check-then-act，
    * 而 redis 的 get 与 set 是两次往返，中间必然有窗口（{@code mappingFunction} 是本地代码，
    * 服务端不参与它的求值）。宁可拒绝，也不给一个并发下会重复计算、互相覆盖的版本。
    * <p>
@@ -904,12 +902,9 @@ public class ExpiredKVCacheContractTest {
   /**
    * setnx 带 ttl：到点照常过期。
    * <p>
-   * 这两件事原先挤在同一个用例里、TTL 只有 1 秒，于是"写 → 断言值还在"那两步只要被
-   * 网络上的一次抖动拖过 1 秒，值就已经过期 —— 断言以一个看不出原因的形式假红
-   * （真因是延迟，不是逻辑）。
-   * <p>
-   * 拆开之后本用例<b>不断言"写完立刻读得到"</b>，只断言"最终读不到"：到期时刻由服务端
-   * 在写入时确定，写完再睡过 TTL，它一定已经过期，这两步都不受往返延迟影响。
+   * 本用例与 {@link #testSetnxWithTimeoutDoesNotOverwrite()} 分开：那条只验证"不覆盖"
+   * （TTL 给 1 分钟）；本用例只断言"最终读不到"，不断言"写完立刻读得到"，因此不受往返
+   * 延迟影响。到期时刻由服务端在写入时确定，写完再睡过 TTL，它一定已经过期。
    */
   @Test
   public void testSetnxWithTimeoutExpires() throws Exception {
@@ -968,8 +963,8 @@ public class ExpiredKVCacheContractTest {
    * StringRedisSerializer、内存实现根本不编码），只要有一家默认字符集不是 UTF-8，
    * 表现就是"写进去、读出来是乱码"，而且不报任何错。
    * <p>
-   * 这条覆盖原先只存在于 {@code TestRedissonRedisKVCache} 的检查 —— 那边只测了 redisson，
-   * 而且断言走的是裸 {@code RBucket}、根本没经过 KVCache；放到这里才对全部实现生效。
+   * 本条对全部实现验证非 ASCII value 原样往返，且断言经过 KVCache 而非裸
+   * {@code RBucket}。
    */
   @Test
   public void testNonAsciiValueRoundTrips() {
@@ -1127,10 +1122,9 @@ public class ExpiredKVCacheContractTest {
    * {@code get} 读不到、{@code containsKey} 返回 false、{@code remove} 返回 null、
    * {@code delete} 返回 false（它没删掉"存在的数据"）、两个 {@code setnx} 都把过期条目当成不存在。
    * <p>
-   * 全部实现一起跑（{@code caches}）：任何一家掉队本用例都会红。历史上
-   * {@link ExpiredHashMapKVCache} 就是掉队的那一家 —— 它的 {@code containsKey} 是裸的
-   * map 查询、{@code remove} 不看到期时刻、不带 TTL 的 {@code setnx} 用裸的
-   * {@code putIfAbsent}，三点都与其余实现相反，且与它<b>自己的</b>带 TTL 重载相反。
+   * 全部实现一起跑（{@code caches}）：任何一家掉队本用例都会红；各实现的
+   * {@code containsKey} / {@code remove} / 不带 TTL 的 {@code setnx} 必须与带 TTL 的重载
+   * 口径一致。
    * <p>
    * 每个观察点用独立的 key：{@code get} / {@code containsKey} 会顺手清掉过期条目，
    * 共用 key 会互相干扰。
@@ -1265,14 +1259,11 @@ public class ExpiredKVCacheContractTest {
   /**
    * <b>非正 TTL 在六个实现上表现一致：不抛异常，且值立即过期。</b>
    * <p>
-   * 这条以前是红的（在 redisson 与 spring-data-redis 上）：它们把非正 timeout 原样下发，
-   * 服务端回一句 {@code ERR invalid expire time in psetex/set}，客户端包一层异常抛出来；
-   * 而两个 lettuce 实现各自取整成 1ms、两个内存实现让到期时刻落在当下 ——
-   * 同一份 {@code timeout = 0} 的配置，一半实现"立即过期"、一半直接报错。
-   * 现在六个实现统一走 {@link ExpiredKVCache#ttlMillis}。
+   * 六个实现统一走 {@link ExpiredKVCache#ttlMillis}：非正 timeout 一律取整为 1ms、
+   * 不抛异常，也不会把非正 timeout 原样下发给服务端。
    * <p>
-   * 断言分两段：<b>调用不得抛异常</b>（这才是旧行为真正违反的那条），
-   * 以及睡过 1ms 之后读不到（1ms 是取整后的 TTL，同一毫秒内可能仍读得到，所以要睡）。
+   * 断言分两段：<b>调用不得抛异常</b>；以及睡过 1ms 之后读不到（1ms 是取整后的 TTL，
+   * 同一毫秒内可能仍读得到，所以要睡）。
    */
   @Test
   public void testNonPositiveTtlIsImmediatelyExpiredOnAllImpls() throws Exception {

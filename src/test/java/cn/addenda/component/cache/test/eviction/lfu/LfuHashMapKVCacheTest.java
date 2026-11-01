@@ -374,10 +374,10 @@ public class LfuHashMapKVCacheTest {
   /**
    * <b>两张统计表的观测入口是只读的</b>：外部拿到的东西改不动账本。
    * <p>
-   * 这两个 getter 以前由 Lombok 生成、直接返回活对象，调用方一次 {@code set} / {@code delete}
-   * 就能把账本改坏（账本与数据层分叉、活数据被提前淘汰），而且不报任何错。
-   * 现在返回只读外壳：读实时转发到活账本，写立刻抛
-   * {@code CacheUnsupportedOperationException}。
+   * 这两个 getter 返回只读外壳：读实时转发到活账本，写立刻抛
+   * {@code CacheUnsupportedOperationException}。直接暴露活对象会让调用方一次
+   * {@code set} / {@code delete} 把账本改坏（账本与数据层分叉、活数据被提前淘汰），
+   * 而且不报任何错。
    * <p>
    * {@code computeIfAbsent} 是<b>被覆盖成一律抛</b>的，不靠"默认实现的写动作最终会落到
    * 被禁掉的 set 上"：默认实现只在 key 不存在时才写入，命中时它读到一个值就直接返回 ——
